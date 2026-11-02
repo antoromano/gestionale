@@ -1,0 +1,385 @@
+// src/modules/settings.js
+// Gestione Impostazioni: Personalizzazione Brand, Dati Fiscali, Condizioni, Integrazioni e Dati Demo
+
+import { store, defaultSettings } from '../services/store.js';
+
+export function renderSettings(container, router) {
+  const settings = store.getSettings();
+
+  container.innerHTML = `
+    <div style="max-width: 900px; margin: 0 auto;">
+      <!-- Messaggio di Salvataggio -->
+      <div id="settings-alert" style="display: none; padding: 12px 16px; border-radius: var(--radius); margin-bottom: 20px;" class="toast success">
+        Impostazioni salvate con successo!
+      </div>
+
+      <form id="settings-form">
+        <!-- 1. IDENTITÀ APP & BRANDING -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Identità & Personalizzazione Grafica</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Nome dell'Applicazione *</label>
+              <input type="text" id="set-app-name" class="form-input" value="${settings.app_name || 'Gestionale'}" required />
+            </div>
+
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Colore Primario</label>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="color" id="set-primary-color" style="width: 44px; height: 38px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; padding: 2px;" value="${settings.primary_color || '#1e293b'}" />
+                <input type="text" id="set-primary-color-text" class="form-input" value="${settings.primary_color || '#1e293b'}" style="font-family: monospace;" />
+              </div>
+            </div>
+
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Colore Accento</label>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="color" id="set-accent-color" style="width: 44px; height: 38px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; padding: 2px;" value="${settings.accent_color || '#2563eb'}" />
+                <input type="text" id="set-accent-color-text" class="form-input" value="${settings.accent_color || '#2563eb'}" style="font-family: monospace;" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Caricamento Logo -->
+          <div class="form-row" style="align-items: center; margin-top: 10px;">
+            <div style="width: 80px; height: 80px; border: 2px dashed var(--border); border-radius: var(--radius); display: flex; align-items: center; justify-content: center; background: #f8fafc; overflow: hidden;" id="logo-preview-box">
+              ${settings.logo_url ? `<img src="${settings.logo_url}" style="width: 100%; height: 100%; object-fit: contain;" />` : `<span style="font-size: 24px; color: var(--text-muted);">🏢</span>`}
+            </div>
+            <div style="flex: 1;">
+              <label class="form-label">Logo Attività (usato su desktop, mobile e PDF)</label>
+              <input type="file" id="set-logo-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" class="form-input" />
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Formati consigliati: PNG trasparente o SVG. Max 5 MB.</div>
+            </div>
+            ${settings.logo_url ? `
+              <button type="button" id="remove-logo-btn" class="btn btn-sm btn-danger">Rimuovi Logo</button>
+            ` : ''}
+          </div>
+        </div>
+
+        <!-- 2. DATI ATTIVITÀ & FISCALI PER I PREVENTIVI -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Intestazione & Dati Fiscali Emittente</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Nome Attività / Studio Professionale</label>
+              <input type="text" id="set-business-name" class="form-input" value="${settings.business_name || ''}" placeholder="es. Studio Creativo Rossi" />
+            </div>
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Titolare / Professionista</label>
+              <input type="text" id="set-owner-name" class="form-input" value="${settings.owner_name || ''}" placeholder="es. Mario Rossi" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Indirizzo</label>
+              <input type="text" id="set-address" class="form-input" value="${settings.address || ''}" placeholder="Via Dante 15" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">CAP</label>
+              <input type="text" id="set-postal-code" class="form-input" value="${settings.postal_code || ''}" placeholder="20121" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Città</label>
+              <input type="text" id="set-city" class="form-input" value="${settings.city || ''}" placeholder="Milano" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Partita IVA</label>
+              <input type="text" id="set-vat-number" class="form-input" value="${settings.vat_number || ''}" placeholder="IT12345678901" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Codice Fiscale</label>
+              <input type="text" id="set-fiscal-code" class="form-input" value="${settings.fiscal_code || ''}" placeholder="RSSMRA80A01H501U" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">PEC</label>
+              <input type="email" id="set-pec" class="form-input" value="${settings.pec || ''}" placeholder="studio@pec.it" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Codice SDI</label>
+              <input type="text" id="set-sdi" class="form-input" value="${settings.sdi_code || ''}" placeholder="0000000" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Email di Contatto</label>
+              <input type="email" id="set-email" class="form-input" value="${settings.email || ''}" placeholder="contatto@studio.it" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Telefono</label>
+              <input type="tel" id="set-phone" class="form-input" value="${settings.phone || ''}" placeholder="+39 02 1234567" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. LOCALIZZAZIONE & PARAMETRI ECONOMICI -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Parametri Economici & Fiscali Predefiniti</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Valuta</label>
+              <select id="set-currency" class="form-select">
+                <option value="EUR" ${settings.currency === 'EUR' ? 'selected' : ''}>Euro (€)</option>
+                <option value="USD" ${settings.currency === 'USD' ? 'selected' : ''}>Dollaro ($)</option>
+                <option value="CHF" ${settings.currency === 'CHF' ? 'selected' : ''}>Franco Svizzero (CHF)</option>
+                <option value="GBP" ${settings.currency === 'GBP' ? 'selected' : ''}>Sterlina (£)</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Fuso Orario</label>
+              <input type="text" id="set-timezone" class="form-input" value="${settings.timezone || 'Europe/Rome'}" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Validità Predefinita Preventivi (Giorni)</label>
+              <input type="number" id="set-validity-days" class="form-input" value="${settings.quote_default_validity_days || 30}" />
+            </div>
+          </div>
+
+          <div class="form-row" style="align-items: center; margin-top: 10px;">
+            <div style="flex: 1.5;">
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                <input type="checkbox" id="set-levy-enabled" ${settings.fiscal_levy_enabled ? 'checked' : ''} />
+                Abilita Oneri / Cassa Previdenziale di default
+              </label>
+            </div>
+            <div class="form-group" style="flex: 2; margin-bottom: 0;">
+              <label class="form-label">Dicitura Oneri</label>
+              <input type="text" id="set-levy-name" class="form-input" value="${settings.fiscal_levy_name || 'Cassa Previdenziale'}" />
+            </div>
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+              <label class="form-label">Aliquota Oneri (%)</label>
+              <input type="number" id="set-levy-percent" class="form-input" step="0.1" value="${settings.fiscal_levy_percent || 4.0}" />
+            </div>
+          </div>
+
+          <div class="form-row" style="align-items: center; margin-top: 12px;">
+            <div style="flex: 1.5;">
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
+                <input type="checkbox" id="set-vat-enabled" ${settings.vat_enabled ? 'checked' : ''} />
+                Abilita IVA di default
+              </label>
+            </div>
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+              <label class="form-label">Aliquota IVA Standard (%)</label>
+              <input type="number" id="set-vat-percent" class="form-input" step="0.1" value="${settings.vat_percent || 22.0}" />
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 14px;">
+            <label class="form-label">Condizioni Contrattuali Predefinite (PDF)</label>
+            <textarea id="set-default-conditions" class="form-textarea" rows="2">${settings.quote_default_conditions || ''}</textarea>
+          </div>
+        </div>
+
+        <!-- 4. INTEGRAZIONI ESTERNE (SUPABASE, GEMINI, GOOGLE, NOTION) -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Integrazioni Servizi Cloud & IA</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Chiave API Google Gemini (per elaborazione testo, foto e note vocali)</label>
+            <input type="password" id="set-gemini-key" class="form-input" value="${settings.gemini_api_key || ''}" placeholder="AIzaSy..." />
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+              Inserisci la chiave API per chiamate dirette o configura GEMINI_API_KEY su Supabase Edge Functions. Se lasciata vuota, il sistema utilizza il motore euristico locale.
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Supabase URL Progetto (Opzionale)</label>
+              <input type="text" id="set-supabase-url" class="form-input" value="${settings.supabase_url || ''}" placeholder="https://xyzcompany.supabase.co" />
+            </div>
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Supabase Anon Key (Opzionale)</label>
+              <input type="password" id="set-supabase-key" class="form-input" value="${settings.supabase_anon_key || ''}" placeholder="eyJhbG..." />
+            </div>
+          </div>
+
+          <!-- Stato Connettori Google Calendar e Notion -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px;">
+            <div style="padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="font-weight: 700;">Google Calendar (2-Way)</span>
+                <span class="badge ${settings.google_calendar_connected ? 'badge-green' : 'badge-gray'}">
+                  ${settings.google_calendar_connected ? 'Collegato' : 'Da collegare'}
+                </span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
+                Gestito tramite Edge Function sicura e OAuth. Risolve conflitti con timestamp prioritario.
+              </div>
+              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer;">
+                <input type="checkbox" id="set-gcal-connected" ${settings.google_calendar_connected ? 'checked' : ''} />
+                Abilita sincronizzazione Google Calendar
+              </label>
+            </div>
+
+            <div style="padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="font-weight: 700;">Notion To-do Connector</span>
+                <span class="badge ${settings.notion_connected ? 'badge-green' : 'badge-gray'}">
+                  ${settings.notion_connected ? 'Collegato' : 'Da collegare'}
+                </span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
+                Sincronizza to-do con database Notion (creazione, scadenze e completamento).
+              </div>
+              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer;">
+                <input type="checkbox" id="set-notion-connected" ${settings.notion_connected ? 'checked' : ''} />
+                Abilita sincronizzazione Notion
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 12px; margin-bottom: 30px;">
+          <button type="submit" class="btn btn-primary" style="padding: 10px 24px; font-size: 14px;">
+            💾 Salva Impostazioni
+          </button>
+        </div>
+      </form>
+
+      <!-- 5. GESTIONE DATI: DEMO E RESET -->
+      <div class="card" style="border-color: rgba(220, 38, 38, 0.2);">
+        <div class="card-header">
+          <div class="card-title">Gestione Dati & Manutenzione Installazione</div>
+        </div>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 14px;">
+          Questa installazione è completamente indipendente. Puoi caricare dati dimostrativi facoltativi per testare tutte le funzionalità oppure azzerare il database per avviare una nuova attività.
+        </p>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <button type="button" id="load-sample-data-btn" class="btn btn-secondary">
+            📂 Carica Dati Dimostrativi di Esempio
+          </button>
+          <button type="button" id="reset-all-data-btn" class="btn btn-danger">
+            ⚠️ Azzera Completamente Tutti i Dati
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Color picker sync
+  const pColor = container.querySelector('#set-primary-color');
+  const pColorText = container.querySelector('#set-primary-color-text');
+  pColor.addEventListener('input', () => { pColorText.value = pColor.value; });
+  pColorText.addEventListener('input', () => { pColor.value = pColorText.value; });
+
+  const aColor = container.querySelector('#set-accent-color');
+  const aColorText = container.querySelector('#set-accent-color-text');
+  aColor.addEventListener('input', () => { aColorText.value = aColor.value; });
+  aColorText.addEventListener('input', () => { aColor.value = aColorText.value; });
+
+  // Upload Logo
+  let newLogoDataUrl = settings.logo_url || '';
+  const logoInput = container.querySelector('#set-logo-file');
+  const logoBox = container.querySelector('#logo-preview-box');
+
+  logoInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Il file del logo supera i 5 MB consentiti.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      newLogoDataUrl = reader.result;
+      logoBox.innerHTML = `<img src="${newLogoDataUrl}" style="width: 100%; height: 100%; object-fit: contain;" />`;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // Rimuovi logo
+  container.querySelector('#remove-logo-btn')?.addEventListener('click', () => {
+    newLogoDataUrl = '';
+    logoBox.innerHTML = `<span style="font-size: 24px; color: var(--text-muted);">🏢</span>`;
+  });
+
+  // Salva Form Impostazioni
+  container.querySelector('#settings-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+
+    const updated = {
+      app_name: container.querySelector('#set-app-name').value.trim() || 'Gestionale',
+      primary_color: pColor.value,
+      accent_color: aColor.value,
+      logo_url: newLogoDataUrl,
+      business_name: container.querySelector('#set-business-name').value.trim(),
+      owner_name: container.querySelector('#set-owner-name').value.trim(),
+      address: container.querySelector('#set-address').value.trim(),
+      postal_code: container.querySelector('#set-postal-code').value.trim(),
+      city: container.querySelector('#set-city').value.trim(),
+      vat_number: container.querySelector('#set-vat-number').value.trim(),
+      fiscal_code: container.querySelector('#set-fiscal-code').value.trim(),
+      pec: container.querySelector('#set-pec').value.trim(),
+      sdi_code: container.querySelector('#set-sdi').value.trim(),
+      email: container.querySelector('#set-email').value.trim(),
+      phone: container.querySelector('#set-phone').value.trim(),
+      currency: container.querySelector('#set-currency').value,
+      timezone: container.querySelector('#set-timezone').value.trim(),
+      quote_default_validity_days: parseInt(container.querySelector('#set-validity-days').value, 10) || 30,
+      fiscal_levy_enabled: container.querySelector('#set-levy-enabled').checked,
+      fiscal_levy_name: container.querySelector('#set-levy-name').value.trim() || 'Cassa Previdenziale',
+      fiscal_levy_percent: parseFloat(container.querySelector('#set-levy-percent').value) || 0,
+      vat_enabled: container.querySelector('#set-vat-enabled').checked,
+      vat_percent: parseFloat(container.querySelector('#set-vat-percent').value) || 0,
+      quote_default_conditions: container.querySelector('#set-default-conditions').value.trim(),
+      gemini_api_key: container.querySelector('#set-gemini-key').value.trim(),
+      supabase_url: container.querySelector('#set-supabase-url').value.trim(),
+      supabase_anon_key: container.querySelector('#set-supabase-key').value.trim(),
+      google_calendar_connected: container.querySelector('#set-gcal-connected').checked,
+      notion_connected: container.querySelector('#set-notion-connected').checked,
+    };
+
+    store.updateSettings(updated);
+
+    // Aggiorna variabili CSS dinamiche
+    document.documentElement.style.setProperty('--primary', updated.primary_color);
+    document.documentElement.style.setProperty('--accent', updated.accent_color);
+    document.title = updated.app_name;
+
+    const alertEl = container.querySelector('#settings-alert');
+    if (alertEl) {
+      alertEl.style.display = 'block';
+      setTimeout(() => { alertEl.style.display = 'none'; }, 3000);
+    }
+  });
+
+  // Carica Dati Demo
+  container.querySelector('#load-sample-data-btn').addEventListener('click', async () => {
+    if (confirm('Vuoi caricare il set completo di dati dimostrativi di esempio?')) {
+      try {
+        const res = await fetch('/sample-data.json');
+        const sampleJson = await res.json();
+        store.loadSampleData(sampleJson);
+        alert('Dati dimostrativi caricati con successo!');
+        router.navigate('dashboard');
+      } catch (err) {
+        alert('Impossibile caricare i dati demo: ' + err.message);
+      }
+    }
+  });
+
+  // Reset Totale Dati
+  container.querySelector('#reset-all-data-btn').addEventListener('click', () => {
+    if (confirm('ATTENZIONE: Questa azione cancellerà permanentemente TUTTI i dati inseriti (clienti, preventivi, to-do, spese, impostazioni). Procedere?')) {
+      store.clearAll();
+      alert('Installazione ripristinata allo stato iniziale vergine.');
+      location.reload();
+    }
+  });
+}

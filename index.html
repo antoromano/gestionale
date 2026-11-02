@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#1e293b" />
+  <meta name="description" content="Web app gestionale per professionisti, freelance e piccole attività" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
+  <title>Gestionale</title>
+  <link rel="stylesheet" href="/src/styles/main.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- SIDEBAR NAVIGAZIONE DESKTOP -->
+    <aside class="sidebar" id="app-sidebar">
+      <div class="sidebar-header">
+        <div id="sidebar-logo-container">
+          <div class="sidebar-logo-placeholder" id="sidebar-logo-placeholder">G</div>
+        </div>
+        <div class="sidebar-title" id="sidebar-app-name">Gestionale</div>
+      </div>
+
+      <nav class="nav-list">
+        <a class="nav-item active" data-route="dashboard">
+          <span>📊</span>
+          <span>Dashboard</span>
+        </a>
+        <a class="nav-item" data-route="todos">
+          <span>✅</span>
+          <span>To-do</span>
+          <span class="badge" id="nav-todos-badge" style="display: none;">0</span>
+        </a>
+        <a class="nav-item" data-route="clients">
+          <span>👥</span>
+          <span>Clienti</span>
+        </a>
+        <a class="nav-item" data-route="calendar">
+          <span>📅</span>
+          <span>Calendario</span>
+        </a>
+        <a class="nav-item" data-route="quotes">
+          <span>📄</span>
+          <span>Preventivi</span>
+        </a>
+        <a class="nav-item" data-route="expenses">
+          <span>💳</span>
+          <span>Spese</span>
+        </a>
+        <a class="nav-item" data-route="reports">
+          <span>📈</span>
+          <span>Report</span>
+        </a>
+        <a class="nav-item" data-route="catalog">
+          <span>📦</span>
+          <span>Catalogo servizi</span>
+        </a>
+        <a class="nav-item" data-route="settings">
+          <span>⚙️</span>
+          <span>Impostazioni</span>
+        </a>
+        <a class="nav-item" data-route="trash">
+          <span>🗑️</span>
+          <span>Cestino</span>
+          <span class="badge" id="nav-trash-badge" style="display: none;">0</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="sidebar-ai-btn" class="btn btn-sm btn-ai" style="width: 100%;">
+          ✨ Assistente IA
+        </button>
+        <div style="display: flex; gap: 6px;">
+          <button id="quick-backup-export" class="btn btn-sm btn-secondary" style="flex: 1; font-size: 11px; padding: 4px;" title="Esporta Backup Dati">
+            ⬇️ Backup
+          </button>
+          <button id="quick-backup-import" class="btn btn-sm btn-secondary" style="flex: 1; font-size: 11px; padding: 4px;" title="Ripristina Backup">
+            ⬆️ Ripristina
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- WRAPPER PRINCIPALE -->
+    <div class="main-wrapper">
+      <!-- Barra Superiore Mobile & Desktop -->
+      <header class="top-bar">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <button id="mobile-menu-toggle" class="btn btn-sm btn-secondary" style="display: none;">
+            ☰ Menu
+          </button>
+          <h1 class="page-title" id="page-title-text">Dashboard</h1>
+        </div>
+
+        <div class="top-actions">
+          <button id="top-ai-btn" class="btn btn-sm btn-ai">
+            ✨ Assistente IA
+          </button>
+        </div>
+      </header>
+
+      <!-- Corpo Contenuti Sezione Attiva -->
+      <main class="content-body" id="app-main-content">
+        <!-- Render dinamico del modulo attivo -->
+      </main>
+    </div>
+
+    <!-- BARRA INFERIORE NAVIGAZIONE MOBILE (Oggi, To-do, IA, Clienti, Agenda) -->
+    <nav class="bottom-nav">
+      <button class="bottom-nav-item active" data-route="dashboard">
+        <span style="font-size: 18px;">📊</span>
+        <span>Oggi</span>
+      </button>
+
+      <button class="bottom-nav-item" data-route="todos">
+        <span style="font-size: 18px;">✅</span>
+        <span>To-do</span>
+      </button>
+
+      <button class="bottom-nav-item ai-btn-center" id="bottom-nav-ai-btn">
+        <div class="ai-circle">
+          <span style="font-size: 20px;">✨</span>
+        </div>
+        <span>IA</span>
+      </button>
+
+      <button class="bottom-nav-item" data-route="clients">
+        <span style="font-size: 18px;">👥</span>
+        <span>Clienti</span>
+      </button>
+
+      <button class="bottom-nav-item" data-route="calendar">
+        <span style="font-size: 18px;">📅</span>
+        <span>Agenda</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Contenitori Modal Globali -->
+  <div id="backup-modal-container"></div>
+  <div id="toast-container"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

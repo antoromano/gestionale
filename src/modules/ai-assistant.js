@@ -32,12 +32,12 @@ export function openAiModal(options = {}) {
           <!-- 1. AREA INPUT RICHIESTA -->
           <div id="ai-input-section">
             <div class="form-group">
-              <label class="form-label">Descrivi cosa devi fare o allega note:</label>
+              <label class="form-label">Descrivi cosa devi fare o fornisci note su clienti/lavori:</label>
               <textarea
                 id="ai-text-input"
                 class="form-textarea"
                 rows="4"
-                placeholder="Es: Devo attivare un abbonamento per lavorare, fare le foto prodotti per ${preselectedName || 'Cliente A'} e preparare i contenuti per Cliente B..."
+                placeholder="Es: Lavoro da mesi con Marco di TechCorp, sito www.techcorp.it, staging stage.techcorp.it, repo antoromano/techcorp-web, stack Next.js e Supabase, canone 300€/mese. Devo fare deploy mercoledì alle 15..."
               ></textarea>
             </div>
 
@@ -85,6 +85,15 @@ export function openAiModal(options = {}) {
               </div>
             </div>
 
+            <!-- Proposte Nuovi Clienti (On-boarding) -->
+            <div id="ai-clients-section" style="margin-bottom: 20px; display: none;">
+              <div style="font-weight: 700; font-size: 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                <span>👤 Nuovi Clienti Rilevati da Acquisire</span>
+                <span id="ai-clients-count" class="badge badge-green">0</span>
+              </div>
+              <div id="ai-clients-container" style="display: flex; flex-direction: column; gap: 10px;"></div>
+            </div>
+
             <!-- Proposte To-do -->
             <div style="margin-bottom: 20px;">
               <div style="font-weight: 700; font-size: 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
@@ -97,7 +106,7 @@ export function openAiModal(options = {}) {
             <!-- Proposte Appuntamenti -->
             <div>
               <div style="font-weight: 700; font-size: 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
-                <span>📅 Appuntamenti & Shooting Proposti</span>
+                <span>📅 Eventi, Rilasci & Scadenze Proposti</span>
                 <span id="ai-appts-count" class="badge badge-gray">0</span>
               </div>
               <div id="ai-appts-container" style="display: flex; flex-direction: column; gap: 10px;"></div>
@@ -260,6 +269,76 @@ export function openAiModal(options = {}) {
     div.querySelector('#ai-todos-count').textContent = (data.todos || []).length;
     div.querySelector('#ai-appts-count').textContent = (data.appointments || []).length;
 
+    const clientsSection = div.querySelector('#ai-clients-section');
+    const clientsContainer = div.querySelector('#ai-clients-container');
+    const clientsToCreate = data.clients_to_create || [];
+    div.querySelector('#ai-clients-count').textContent = clientsToCreate.length;
+
+    if (clientsToCreate.length > 0) {
+      clientsSection.style.display = 'block';
+      clientsContainer.innerHTML = clientsToCreate.map((c, idx) => `
+        <div class="card ai-client-card" data-idx="${idx}" style="padding: 14px; margin-bottom: 0; border: 1px solid #bbf7d0; background: #f0fdf4;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: #166534;">
+              <input type="checkbox" class="ai-include-client" data-idx="${idx}" checked />
+              Acquisisci Nuovo Cliente: ${c.company_name}
+            </label>
+            <span class="badge badge-green">Onboarding Rilevato</span>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Azienda / Nome *</label>
+              <input type="text" class="form-input ai-client-name" data-idx="${idx}" value="${c.company_name}" />
+            </div>
+            <div class="form-group" style="flex: 1.5;">
+              <label class="form-label">Referente</label>
+              <input type="text" class="form-input ai-client-contact" data-idx="${idx}" value="${c.first_name ? `${c.first_name} ${c.last_name || ''}`.trim() : ''}" />
+            </div>
+            <div class="form-group" style="flex: 1.5;">
+              <label class="form-label">Email</label>
+              <input type="email" class="form-input ai-client-email" data-idx="${idx}" value="${c.email || ''}" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Staging URL</label>
+              <input type="url" class="form-input ai-client-staging" data-idx="${idx}" value="${c.staging_url || ''}" placeholder="https://staging..." />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Produzione URL</label>
+              <input type="url" class="form-input ai-client-prod" data-idx="${idx}" value="${c.production_url || ''}" placeholder="https://www..." />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Repo GitHub (owner/repo)</label>
+              <input type="text" class="form-input ai-client-repo" data-idx="${idx}" value="${c.github_repo || ''}" placeholder="owner/repo" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Stack Tecnologico</label>
+              <input type="text" class="form-input ai-client-stack" data-idx="${idx}" value="${c.stack || ''}" placeholder="es. React, Next.js, Supabase" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Canone Manutenzione (€)</label>
+              <input type="number" class="form-input ai-client-maintenance" data-idx="${idx}" step="0.01" value="${c.maintenance_amount || 0}" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Frequenza</label>
+              <select class="form-select ai-client-freq" data-idx="${idx}">
+                <option value="monthly" ${c.maintenance_frequency === 'monthly' ? 'selected' : ''}>Mensile</option>
+                <option value="annual" ${c.maintenance_frequency === 'annual' ? 'selected' : ''}>Annuale</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    } else {
+      clientsSection.style.display = 'none';
+    }
+
     const todosContainer = div.querySelector('#ai-todos-container');
     const apptsContainer = div.querySelector('#ai-appts-container');
 
@@ -373,16 +452,73 @@ export function openAiModal(options = {}) {
   confirmBtn.addEventListener('click', () => {
     if (!currentParsedResult) return;
 
+    let createdClientsCount = 0;
     let createdTodosCount = 0;
     let createdApptsCount = 0;
+    const clientNameToIdMap = {};
 
-    // Salva to-do confermati
+    // 1. Salva nuovi clienti confermati (Onboarding)
+    div.querySelectorAll('.ai-include-client:checked').forEach(cb => {
+      const idx = cb.dataset.idx;
+      const rawC = currentParsedResult.clients_to_create[idx];
+      const company_name = div.querySelector(`.ai-client-name[data-idx="${idx}"]`).value.trim();
+      const contact_person = div.querySelector(`.ai-client-contact[data-idx="${idx}"]`).value.trim();
+      const email = div.querySelector(`.ai-client-email[data-idx="${idx}"]`).value.trim();
+      const staging_url = div.querySelector(`.ai-client-staging[data-idx="${idx}"]`).value.trim();
+      const production_url = div.querySelector(`.ai-client-prod[data-idx="${idx}"]`).value.trim();
+      const github_repo = div.querySelector(`.ai-client-repo[data-idx="${idx}"]`).value.trim();
+      const stack = div.querySelector(`.ai-client-stack[data-idx="${idx}"]`).value.trim();
+      const maintenance_amount = parseFloat(div.querySelector(`.ai-client-maintenance[data-idx="${idx}"]`).value) || 0;
+      const maintenance_frequency = div.querySelector(`.ai-client-freq[data-idx="${idx}"]`).value || 'monthly';
+
+      const contracts = [];
+      if (maintenance_amount > 0) {
+        contracts.push({
+          title: 'Canone Manutenzione & Assistenza (SLA)',
+          amount: maintenance_amount,
+          frequency: maintenance_frequency,
+          status: 'active',
+          created_at: new Date().toISOString(),
+        });
+      }
+
+      const newClient = store.create('clients', {
+        type: 'company',
+        company_name: company_name || 'Nuovo Cliente',
+        contact_person,
+        email,
+        phone: rawC?.phone || '',
+        staging_url,
+        production_url,
+        github_repo,
+        stack,
+        notes: rawC?.notes || '',
+        maintenance_contracts: contracts,
+      });
+
+      createdClientsCount++;
+      if (company_name) clientNameToIdMap[company_name.toLowerCase()] = newClient.id;
+      if (contact_person) clientNameToIdMap[contact_person.toLowerCase()] = newClient.id;
+    });
+
+    // 2. Salva to-do confermati
     div.querySelectorAll('.ai-include-todo:checked').forEach(cb => {
       const idx = cb.dataset.idx;
       const title = div.querySelector(`.ai-todo-title[data-idx="${idx}"]`).value.trim();
-      const clientId = div.querySelector(`.ai-todo-client[data-idx="${idx}"]`).value || null;
+      let clientId = div.querySelector(`.ai-todo-client[data-idx="${idx}"]`).value || null;
       const due = div.querySelector(`.ai-todo-due[data-idx="${idx}"]`).value || null;
       const comp = parseFloat(div.querySelector(`.ai-todo-comp[data-idx="${idx}"]`).value) || 0;
+
+      // Se non selezionato esplicitamente, controlla se corrisponde a un cliente appena creato
+      if (!clientId && currentParsedResult.todos[idx]?.client_name_proposed) {
+        const propName = currentParsedResult.todos[idx].client_name_proposed.toLowerCase();
+        for (const [nameKey, newId] of Object.entries(clientNameToIdMap)) {
+          if (nameKey.includes(propName) || propName.includes(nameKey)) {
+            clientId = newId;
+            break;
+          }
+        }
+      }
 
       if (title) {
         store.create('todos', {
@@ -399,14 +535,24 @@ export function openAiModal(options = {}) {
       }
     });
 
-    // Salva appuntamenti confermati
+    // 3. Salva appuntamenti ed eventi confermati
     div.querySelectorAll('.ai-include-appt:checked').forEach(cb => {
       const idx = cb.dataset.idx;
       const title = div.querySelector(`.ai-appt-title[data-idx="${idx}"]`).value.trim();
-      const clientId = div.querySelector(`.ai-appt-client[data-idx="${idx}"]`).value || null;
+      let clientId = div.querySelector(`.ai-appt-client[data-idx="${idx}"]`).value || null;
       const start = div.querySelector(`.ai-appt-start[data-idx="${idx}"]`).value;
       const loc = div.querySelector(`.ai-appt-loc[data-idx="${idx}"]`).value.trim();
       const rawAppt = currentParsedResult.appointments[idx];
+
+      if (!clientId && rawAppt?.client_name_proposed) {
+        const propName = rawAppt.client_name_proposed.toLowerCase();
+        for (const [nameKey, newId] of Object.entries(clientNameToIdMap)) {
+          if (nameKey.includes(propName) || propName.includes(nameKey)) {
+            clientId = newId;
+            break;
+          }
+        }
+      }
 
       if (title && start) {
         store.create('appointments', {
@@ -416,15 +562,19 @@ export function openAiModal(options = {}) {
           end_time: rawAppt?.end_time || null,
           location: loc,
           is_all_day: Boolean(rawAppt?.is_all_day),
-          is_shooting: Boolean(rawAppt?.is_shooting),
-          shooting_type: rawAppt?.shooting_type || '',
+          activity_type: rawAppt?.activity_type || (rawAppt?.is_shooting ? 'deploy' : 'general'),
           compensation_amount: rawAppt?.compensation_amount || 0,
         });
         createdApptsCount++;
       }
     });
 
-    alert(`Salvataggio completato: creati ${createdTodosCount} To-do e ${createdApptsCount} Appuntamenti/Shooting.`);
+    const parts = [];
+    if (createdClientsCount > 0) parts.push(`${createdClientsCount} Clienti acquisiti`);
+    parts.push(`${createdTodosCount} To-do creati`);
+    parts.push(`${createdApptsCount} Eventi in agenda`);
+
+    alert(`Operazione completata: ${parts.join(', ')}.`);
     div.remove();
     if (onSaved) onSaved();
   });

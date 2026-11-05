@@ -19,6 +19,7 @@ export function renderReports(container, router) {
 
   // Esegue il calcolo finanziario unificato con protezione anti-duplicati
   const report = calculateFinancialReport({
+    clients,
     quotes,
     payments,
     todos,
@@ -58,6 +59,28 @@ export function renderReports(container, router) {
         <div style="display: flex; gap: 8px;">
           <button id="report-preset-ytd" class="btn btn-sm btn-secondary">Anno in Corso</button>
           <button id="report-reset-filters" class="btn btn-sm btn-secondary">Azzera Filtri</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scheda Ricavi Ricorrenti MRR / Canoni Manutenzione -->
+    <div class="card" style="margin-bottom: 24px; background: #f0fdf4; border: 1px solid #bbf7d0;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div>
+          <div style="font-size: 11px; text-transform: uppercase; color: #166534; font-weight: 700; letter-spacing: 0.5px;">
+            Canoni Ricorrenti di Manutenzione & Hosting (MRR / ARR)
+          </div>
+          <div style="font-size: 24px; font-weight: 800; color: #166534; margin-top: 4px;">
+            ${formatCurrency(report.mrr || 0)} <span style="font-size: 14px; font-weight: 600;">/ mese</span>
+          </div>
+          <div style="font-size: 12px; color: #166534; margin-top: 4px;">
+            Fatturato Ricorrente Annuo Previsto (ARR): <strong>${formatCurrency((report.mrr || 0) * 12)}</strong>
+          </div>
+        </div>
+        <div>
+          <span class="badge badge-green" style="font-size: 13px; padding: 6px 12px;">
+            ${report.activeContractsCount || 0} canoni attivi
+          </span>
         </div>
       </div>
     </div>

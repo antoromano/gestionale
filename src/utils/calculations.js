@@ -118,9 +118,10 @@ export function calculatePaymentBalance(effectiveTotal, payments = []) {
 }
 
 /**
- * Calcola i dati aggregati per la sezione Report evitando rigorosamente qualsiasi doppio conteggio.
+ * Calcola i dati aggregati per la sezione Report evitando rigorosamente qualsiasi doppio conteggio,
+ * e calcola le metriche MRR (Monthly Recurring Revenue) da contratti di manutenzione/canoni attivi.
  */
-export function calculateFinancialReport({ quotes = [], payments = [], todos = [], expenses = [], filterClientId = null, startDate = null, endDate = null }) {
+export function calculateFinancialReport({ quotes = [], payments = [], todos = [], expenses = [], clients = [], filterClientId = null, startDate = null, endDate = null }) {
   // Filtro preventivi
   const filteredQuotes = (quotes || []).filter(q => {
     if (q.is_deleted) return false;
@@ -159,6 +160,32 @@ export function calculateFinancialReport({ quotes = [], payments = [], todos = [
     return t.compensation_mode === 'autonomous' || t.compensation_mode === 'extra';
   });
 
+  // Calcolo MRR (Monthly Recurring Revenue) da contratti di manutenzione / canoni
+  let mrr = 0;
+  let activeContractsCount = 0;
+  const filteredClients = (clients || []).filter(c => {
+    if (c.is_deleted) return false;
+    if (filterClientId && c.id !== filterClientId) return false;
+    return true;
+  });
+
+  for (const c of filteredClients) {
+    const contracts = c.maintenance_contracts || c.tech_details?.maintenance_contracts || [];
+    for (const contract of contracts) {
+      if (contract.status === 'active') {
+        const amt = Number(contract.amount) || 0;
+        activeContractsCount++;
+        if (contract.frequency === 'quarterly') {
+          mrr += amt / 3;
+        } else if (contract.frequency === 'annual') {
+          mrr += amt / 12;
+        } else {
+          mrr += amt; // monthly default
+        }
+      }
+    }
+  }
+
   // Calcolo valore pattuito / ricavi concordati:
   // Preventivi accettati o inviati + Servizi extra approvati + To-do autonomi
   let agreedRevenue = 0;
@@ -196,6 +223,8 @@ export function calculateFinancialReport({ quotes = [], payments = [], todos = [
   // Spese
   const totalExpenses = filteredExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
 
+  mrr = Math.round(mrr * 100) / 100;
+
   // Residuo ancora da incassare
   const residualReceivables = Math.max(0, agreedRevenue - collectedCash);
 
@@ -211,6 +240,9 @@ export function calculateFinancialReport({ quotes = [], payments = [], todos = [
     totalExpenses: Math.round(totalExpenses * 100) / 100,
     estimatedCashMargin: Math.round(estimatedCashMargin * 100) / 100,
     estimatedAgreedMargin: Math.round(estimatedAgreedMargin * 100) / 100,
+    mrr,
+    activeContractsCount,
+    annualRecurringRevenue: Math.round(mrr * 12 * 100) / 100,
     quotesCount: filteredQuotes.length,
     paymentsCount: filteredPayments.length,
     expensesCount: filteredExpenses.length,

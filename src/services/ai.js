@@ -61,24 +61,41 @@ async function callDirectGemini(apiKey, payload, existingClients, preselectedCli
     : 'Nessun cliente registrato.';
 
   const systemInstruction = `
-Sei l'assistente operativo per un gestionale professionale. Estrai to-do e appuntamenti da questa richiesta.
+Sei l'assistente operativo e on-boarding per un software engineer/sviluppatore freelance.
+Il tuo compito è analizzare la richiesta (anche note informali, audio trascritto o descrizioni lunghe di clienti con cui si lavora già da mesi) ed estrarre:
+1. "clients_to_create": se l'utente descrive un cliente da registrare/importare (nome, azienda, email, telefono, staging_url, production_url, github_repo, stack tecnologico, canone di manutenzione mensile/annuale, note).
+2. "todos": attività operative e to-do da svolgere.
+3. "appointments": appuntamenti, rilasci/deploy, demo sprint, call tecniche o scadenze server/domini.
+
 Data odierna: ${payload.currentDateIso}
 Fuso orario: ${payload.timezone}
-Clienti registrati:
+Clienti già esistenti:
 ${clientsListStr}
 
-REGOLE ESSENZIALI:
-1. Riconosci richieste multiple (es. "Devo attivare un abbonamento per lavorare, fare le foto prodotti per Cliente A e preparare i contenuti per Cliente B") e genera proposte distinte.
-2. NON inventare clienti. I servizi o le azioni non sono clienti. Se il cliente non è tra quelli elencati o è ambiguo, lascia client_id: null e compila client_name_proposed.
-3. Distingui scadenze (todos) da appuntamenti (orario preciso, luogo o shooting).
-4. Restituisci SOLO un JSON con questo schema:
+SCHEMA JSON DA RESTITUIRE OBBLIGATORIAMENTE (e nient'altro):
 {
-  "summary": "Riassunto",
+  "summary": "Breve riassunto dell'azione",
+  "clients_to_create": [
+    {
+      "company_name": "string",
+      "first_name": "string",
+      "last_name": "string",
+      "email": "string",
+      "phone": "string",
+      "staging_url": "string",
+      "production_url": "string",
+      "github_repo": "string",
+      "stack": "string",
+      "maintenance_amount": 0,
+      "maintenance_frequency": "monthly"|"quarterly"|"annual",
+      "notes": "string"
+    }
+  ],
   "todos": [
     { "title": "string", "notes": "string", "client_id": "string|null", "client_name_proposed": "string", "due_date": "YYYY-MM-DDTHH:mm:ss|null", "priority": "bassa"|"media"|"alta"|"urgente", "compensation_amount": 0 }
   ],
   "appointments": [
-    { "title": "string", "description": "string", "location": "string", "client_id": "string|null", "client_name_proposed": "string", "start_time": "YYYY-MM-DDTHH:mm:ss", "end_time": "string|null", "is_all_day": false, "is_shooting": false, "compensation_amount": 0 }
+    { "title": "string", "description": "string", "location": "string", "client_id": "string|null", "client_name_proposed": "string", "start_time": "YYYY-MM-DDTHH:mm:ss", "end_time": "string|null", "is_all_day": false, "activity_type": "deploy"|"demo"|"call"|"server_deadline"|"general", "compensation_amount": 0 }
   ]
 }
 `;
@@ -117,6 +134,7 @@ REGOLE ESSENZIALI:
 function localHeuristicParser(text = '', existingClients = [], preselectedClientId = null) {
   const result = {
     summary: 'Proposte generate tramite analisi del testo',
+    clients_to_create: [],
     todos: [],
     appointments: [],
   };
@@ -125,9 +143,104 @@ function localHeuristicParser(text = '', existingClients = [], preselectedClient
     return result;
   }
 
-  // Separa frasi e congiunzioni ("e", virgole, punti e virgola, "devo")
+  const lowerText = text.toLowerCase();
+
+  // 1. Riconoscimento On-boarding Nuovo Cliente / Cliente Storico
+  // Es: "Lavoro da mesi con Marco di TechCorp, canone 300€/mese, sito techcorp.it, staging stage.techcorp.it, repo antoromano/techcorp-web, stack Next.js e Supabase"
+  const isOnboarding = /(?:lavoro|collaboro).+?con|nuovo cliente|cliente storico|aggiungi cliente|onboard|gestisco il cliente/i.test(text)
+    || (/(?:sito|staging|repo|canone|stack)/i.test(text) && /(?:per|cliente|con)\s+([A-Z][a-zA-Z0-9_\s]{2,25})/i.test(text));
+
+  if (isOnboarding) {
+    let companyName = '';
+    let firstName = '';
+    let lastName = '';
+
+    // Estrazione nome e azienda
+    const withCompanyMatch = text.match(/(?:lavoro\s+(?:da\s+[\w\s]+\s+)?con|collaboro\s+(?:da\s+[\w\s]+\s+)?con|per|cliente)\s+([A-Z][a-zA-Z]+)(?:\s+([A-Z][a-zA-Z]+))?\s+di\s+([A-Z][a-zA-Z0-9_\s.-]+?)(?:,|\.|\s+da|\s+canone|\s+sito|\s+repo|$)/i);
+    if (withCompanyMatch) {
+      firstName = withCompanyMatch[1].trim();
+      if (withCompanyMatch[2]) lastName = withCompanyMatch[2].trim();
+      companyName = withCompanyMatch[3].trim();
+    } else {
+      const companyDirectMatch = text.match(/(?:cliente|azienda|ragione sociale)[:\s]+([A-Z][a-zA-Z0-9_\s.-]+?)(?:,|\.|\n|sito|repo|$)/i);
+      if (companyDirectMatch) {
+        companyName = companyDirectMatch[1].trim();
+      } else {
+        const nameMatch = text.match(/(?:lavoro(?:\s+da\s+[\w\s]+\s+)?con|collaboro\s+con|cliente)\s+([A-Z][a-zA-Z0-9_\s.-]{2,25})/i);
+        if (nameMatch) {
+          companyName = nameMatch[1].trim();
+        }
+      }
+    }
+
+    // Estrazione URLs
+    const urls = text.match(/https?:\/\/[^\s,;)]+|www\.[^\s,;)]+|[a-zA-Z0-9-]+\.(?:it|com|io|app|dev|net|org)(?:\/[^\s,;)]*)?/gi) || [];
+    let prodUrl = '';
+    let stagingUrl = '';
+
+    for (const u of urls) {
+      const fullUrl = u.startsWith('http') ? u : `https://${u}`;
+      if (/stage|staging|dev|test/i.test(u)) {
+        if (!stagingUrl) stagingUrl = fullUrl;
+      } else if (!/github\.com/i.test(u)) {
+        if (!prodUrl) prodUrl = fullUrl;
+      }
+    }
+
+    // Estrazione GitHub Repo
+    let githubRepo = '';
+    const repoMatch = text.match(/(?:github\.com\/|repo(?:\s+github)?[:\s]+)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/i);
+    if (repoMatch) {
+      githubRepo = repoMatch[1].replace(/\.git$/, '');
+    }
+
+    // Estrazione Stack Tecnologico
+    const techKeywords = ['React', 'Next.js', 'Next', 'Vue', 'Nuxt', 'Node.js', 'Node', 'TypeScript', 'JavaScript', 'Python', 'Django', 'FastAPI', 'Laravel', 'PHP', 'Supabase', 'PostgreSQL', 'Tailwind', 'Docker', 'AWS', 'Vercel', 'Shopify', 'WordPress', 'WooCommerce'];
+    const detectedStack = [];
+    for (const kw of techKeywords) {
+      const reg = new RegExp(`\\b${kw.replace('.', '\\.')}\\b`, 'i');
+      if (reg.test(text) && !detectedStack.includes(kw)) {
+        detectedStack.push(kw);
+      }
+    }
+
+    // Canone di manutenzione / ricorrente
+    let maintenanceAmount = 0;
+    let maintenanceFrequency = 'monthly';
+    const canoneMatch = text.match(/(\d+(?:[.,]\d{1,2})?)\s*(?:€|euro)\s*(?:\/|\s*al\s*)?(mese|mensile|mensili|anno|annuale|annui)?/i);
+    if (canoneMatch && (lowerText.includes('canone') || lowerText.includes('manutenzione') || lowerText.includes('sla') || lowerText.includes('/mese') || lowerText.includes('mensil'))) {
+      maintenanceAmount = parseFloat(canoneMatch[1].replace(',', '.'));
+      if (canoneMatch[2] && /anno|annuale|annui/i.test(canoneMatch[2])) {
+        maintenanceFrequency = 'annual';
+      }
+    }
+
+    // Email & Phone
+    const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    const phoneMatch = text.match(/(?:\+39\s?)?(?:3\d{2}[-.\s]?\d{6,7}|\d{2,4}[-.\s]?\d{5,8})/);
+
+    if (companyName || firstName) {
+      result.clients_to_create.push({
+        company_name: companyName || (firstName ? `${firstName} ${lastName}`.trim() : 'Nuovo Cliente'),
+        first_name: firstName,
+        last_name: lastName,
+        email: emailMatch ? emailMatch[0] : '',
+        phone: phoneMatch ? phoneMatch[0] : '',
+        staging_url: stagingUrl,
+        production_url: prodUrl,
+        github_repo: githubRepo,
+        stack: detectedStack.join(', '),
+        maintenance_amount: maintenanceAmount,
+        maintenance_frequency: maintenanceFrequency,
+        notes: text,
+      });
+      result.summary = `Rilevato nuovo profilo cliente (${companyName || firstName}) da acquisire nel gestionale`;
+    }
+  }
+
+  // Separa frasi, periodi e congiunzioni ("e", virgole, punti, punti e virgola, "devo")
   const clauses = text
-    .split(/\s*,\s*|\s+e\s+|\s*;\s*|\n+/)
+    .split(/\s*,\s*|\s+e\s+|\s*;\s*|\.\s+|\n+/)
     .map(s => s.trim())
     .filter(s => s.length > 3);
 
@@ -150,7 +263,7 @@ function localHeuristicParser(text = '', existingClients = [], preselectedClient
     // Se non ha trovato un cliente esistente ma menziona "per [Nome]" o "cliente [Nome]"
     if (!assignedClientId) {
       const clientMatch = clause.match(/(?:per\s+(?:il\s+cliente\s+)?|cliente\s+)([A-Z][a-zA-Z0-9_\s]{2,20})/i);
-      if (clientMatch && !/abbonamento|software|lavoro|casa|studio/i.test(clientMatch[1])) {
+      if (clientMatch && !/abbonamento|software|lavoro|casa|studio|server|dominio|deploy/i.test(clientMatch[1])) {
         proposedClientName = clientMatch[1].trim();
       }
     }
@@ -158,7 +271,22 @@ function localHeuristicParser(text = '', existingClients = [], preselectedClient
     // Rilevamento data/scadenza
     let dueDate = null;
     let isAppointment = false;
-    let isShooting = lower.includes('shooting') || lower.includes('foto') || lower.includes('servizio fotografico');
+    let activityType = 'general';
+
+    // Rilevamento tipologia attività dev
+    if (lower.includes('deploy') || lower.includes('rilascio') || lower.includes('go-live') || lower.includes('messa in produzione')) {
+      activityType = 'deploy';
+      isAppointment = true;
+    } else if (lower.includes('demo') || lower.includes('sprint') || lower.includes('review') || lower.includes('presentazione')) {
+      activityType = 'demo';
+      isAppointment = true;
+    } else if (lower.includes('call') || lower.includes('meeting') || lower.includes('allineamento') || lower.includes('riunione')) {
+      activityType = 'call';
+      isAppointment = true;
+    } else if (lower.includes('scadenza server') || lower.includes('scadenza dominio') || lower.includes('rinnovo ssl') || lower.includes('scadenza licenza')) {
+      activityType = 'server_deadline';
+      isAppointment = true;
+    }
 
     if (lower.includes('domani')) {
       const d = new Date(now);
@@ -193,24 +321,29 @@ function localHeuristicParser(text = '', existingClients = [], preselectedClient
       .replace(/^fare\s+/i, 'Fare ')
       .replace(/^preparare\s+/i, 'Preparare ')
       .replace(/^attivare\s+/i, 'Attivare ')
+      .replace(/^eseguire\s+/i, 'Eseguire ')
       .trim();
 
     cleanTitle = cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1);
 
-    if (isAppointment || isShooting) {
+    // Salta frasi che descrivono puramente parametri del cliente onboarded
+    if (isOnboarding && /^(sito|staging|repo|stack|canone|lavoro con|collaboro con)/i.test(clause)) {
+      continue;
+    }
+
+    if (isAppointment) {
       const startTime = dueDate || new Date(now.getTime() + 24 * 3600 * 1000).toISOString();
-      const endTime = new Date(new Date(startTime).getTime() + 2 * 3600 * 1000).toISOString();
+      const endTime = new Date(new Date(startTime).getTime() + 1 * 3600 * 1000).toISOString();
       result.appointments.push({
         title: cleanTitle,
         description: `Rilevato da nota: "${clause}"`,
-        location: '',
+        location: activityType === 'call' ? 'Online / Google Meet' : '',
         client_id: assignedClientId,
         client_name_proposed: proposedClientName,
         start_time: startTime,
         end_time: endTime,
         is_all_day: !timeMatch,
-        is_shooting: isShooting,
-        shooting_type: isShooting ? 'Servizio fotografico' : '',
+        activity_type: activityType,
         compensation_amount: compensation,
       });
     } else {
@@ -230,9 +363,23 @@ function localHeuristicParser(text = '', existingClients = [], preselectedClient
 }
 
 function normalizeAiResponse(data, existingClients, preselectedClientId) {
+  const clients_to_create = (data.clients_to_create || []).map(c => ({
+    company_name: c.company_name || 'Nuovo Cliente',
+    first_name: c.first_name || '',
+    last_name: c.last_name || '',
+    email: c.email || '',
+    phone: c.phone || '',
+    staging_url: c.staging_url || '',
+    production_url: c.production_url || '',
+    github_repo: c.github_repo || '',
+    stack: c.stack || '',
+    maintenance_amount: Number(c.maintenance_amount) || 0,
+    maintenance_frequency: c.maintenance_frequency || 'monthly',
+    notes: c.notes || '',
+  }));
+
   const todos = (data.todos || []).map(t => {
     let clientId = t.client_id || preselectedClientId || null;
-    // Se il client_id non corrisponde a un ID valido reale, tenta di matcharlo per nome
     if (clientId && !existingClients.some(c => c.id === clientId)) {
       const found = existingClients.find(c => c.name.toLowerCase() === (t.client_name_proposed || '').toLowerCase());
       clientId = found ? found.id : null;
@@ -255,7 +402,7 @@ function normalizeAiResponse(data, existingClients, preselectedClientId) {
       clientId = found ? found.id : null;
     }
     return {
-      title: a.title || 'Nuovo Appuntamento',
+      title: a.title || 'Nuovo Evento',
       description: a.description || '',
       location: a.location || '',
       client_id: clientId,
@@ -263,14 +410,14 @@ function normalizeAiResponse(data, existingClients, preselectedClientId) {
       start_time: a.start_time || new Date().toISOString(),
       end_time: a.end_time || null,
       is_all_day: Boolean(a.is_all_day),
-      is_shooting: Boolean(a.is_shooting),
-      shooting_type: a.shooting_type || '',
+      activity_type: a.activity_type || (a.is_shooting ? 'deploy' : 'general'),
       compensation_amount: Number(a.compensation_amount) || 0,
     };
   });
 
   return {
     summary: data.summary || 'Proposte estratte con successo',
+    clients_to_create,
     todos,
     appointments,
   };

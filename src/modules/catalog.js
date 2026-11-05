@@ -167,17 +167,18 @@ function openCatalogModal(item, parentContainer, router) {
             <div class="form-row">
               <div class="form-group" style="flex: 2;">
                 <label class="form-label">Nome Servizio / Articolo *</label>
-                <input type="text" id="cat-name" class="form-input" value="${item?.name || ''}" required placeholder="es. Servizio Fotografico Completo" />
+                <input type="text" id="cat-name" class="form-input" value="${item?.name || ''}" required placeholder="es. Sviluppo Web App SaaS / API Integration" />
               </div>
               <div class="form-group" style="flex: 1;">
                 <label class="form-label">Categoria</label>
-                <input type="text" id="cat-category" class="form-input" list="cat-preset-list" value="${item?.category || 'Servizi'}" />
+                <input type="text" id="cat-category" class="form-input" list="cat-preset-list" value="${item?.category || 'Sviluppo Software'}" />
                 <datalist id="cat-preset-list">
-                  <option value="Fotografia"></option>
-                  <option value="Consulenza"></option>
-                  <option value="Sviluppo Web"></option>
-                  <option value="Grafica & Branding"></option>
-                  <option value="Formazione"></option>
+                  <option value="Sviluppo Web & SaaS"></option>
+                  <option value="API & Integrazioni Backend"></option>
+                  <option value="DevOps & Cloud (Docker/CI-CD)"></option>
+                  <option value="Canone Manutenzione & SLA"></option>
+                  <option value="Code Audit & Ottimizzazione"></option>
+                  <option value="Consulenza Tecnica"></option>
                 </datalist>
               </div>
             </div>

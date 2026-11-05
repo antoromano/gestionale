@@ -45,7 +45,7 @@ export function renderCalendar(container, router) {
           </div>
           ${gcalStatusBadge}
           <button id="cal-new-appointment-btn" class="btn btn-primary">
-            + Nuovo Appuntamento / Shooting
+            + Nuovo Evento / Rilascio
           </button>
         </div>
       </div>
@@ -150,16 +150,35 @@ function renderMonthGrid(year, month, appointments, todos, clients) {
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 3px; overflow-y: auto; max-height: 85px;">
-          ${dayAppts.map(a => `
-            <div
-              class="cal-event-pill"
-              data-id="${a.id}"
-              style="font-size: 11px; padding: 2px 5px; border-radius: 4px; background: ${a.is_shooting ? '#dbeafe' : '#f1f5f9'}; color: ${a.is_shooting ? '#1e40af' : '#334155'}; font-weight: 600; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid ${a.is_shooting ? '#2563eb' : '#64748b'};"
-              title="${a.title}"
-            >
-              ${a.is_shooting ? '📸' : '🕒'} ${a.title}
-            </div>
-          `).join('')}
+          ${dayAppts.map(a => {
+            let icon = '🕒';
+            let bg = '#f1f5f9';
+            let color = '#334155';
+            let border = '#64748b';
+
+            if (a.activity_type === 'deploy') {
+              icon = '🚀'; bg = '#dbeafe'; color = '#1e40af'; border = '#2563eb';
+            } else if (a.activity_type === 'demo') {
+              icon = '💻'; bg = '#dcfce7'; color = '#166534'; border = '#16a34a';
+            } else if (a.activity_type === 'call') {
+              icon = '📞'; bg = '#fef9c3'; color = '#854d0e'; border = '#ca8a04';
+            } else if (a.activity_type === 'server_deadline') {
+              icon = '⏳'; bg = '#fee2e2'; color = '#991b1b'; border = '#dc2626';
+            } else if (a.is_shooting) {
+              icon = '📸'; bg = '#dbeafe'; color = '#1e40af'; border = '#2563eb';
+            }
+
+            return `
+              <div
+                class="cal-event-pill"
+                data-id="${a.id}"
+                style="font-size: 11px; padding: 2px 5px; border-radius: 4px; background: ${bg}; color: ${color}; font-weight: 600; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid ${border};"
+                title="${a.title}"
+              >
+                ${icon} ${a.title}
+              </div>
+            `;
+          }).join('')}
 
           ${dayTodos.map(t => `
             <div style="font-size: 10px; padding: 2px 4px; border-radius: 4px; background: #fef3c7; color: #92400e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
@@ -200,6 +219,22 @@ function renderAgendaList(appointments, todos, clients) {
         <div style="display: flex; flex-direction: column; gap: 10px;">
           ${sortedAppts.map(a => {
             const client = a.client_id ? clients.find(c => c.id === a.client_id) : null;
+            let icon = '📅';
+            let badgeText = 'Incontro';
+            let badgeClass = 'badge-gray';
+
+            if (a.activity_type === 'deploy') {
+              icon = '🚀'; badgeText = 'Deploy'; badgeClass = 'badge-blue';
+            } else if (a.activity_type === 'demo') {
+              icon = '💻'; badgeText = 'Sprint Demo'; badgeClass = 'badge-green';
+            } else if (a.activity_type === 'call') {
+              icon = '📞'; badgeText = 'Call Tecnica'; badgeClass = 'badge-yellow';
+            } else if (a.activity_type === 'server_deadline') {
+              icon = '⏳'; badgeText = 'Scadenza Server/SSL'; badgeClass = 'badge-red';
+            } else if (a.is_shooting) {
+              icon = '📸'; badgeText = a.shooting_type || 'Shooting'; badgeClass = 'badge-blue';
+            }
+
             return `
               <div
                 class="cal-event-pill"
@@ -208,9 +243,9 @@ function renderAgendaList(appointments, todos, clients) {
               >
                 <div>
                   <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 16px;">${a.is_shooting ? '📸' : '📅'}</span>
+                    <span style="font-size: 16px;">${icon}</span>
                     <span style="font-weight: 700; font-size: 14px;">${a.title}</span>
-                    <span class="badge ${a.is_shooting ? 'badge-blue' : 'badge-gray'}">${a.is_shooting ? (a.shooting_type || 'Shooting') : 'Incontro'}</span>
+                    <span class="badge ${badgeClass}">${badgeText}</span>
                   </div>
 
                   <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">
@@ -244,7 +279,7 @@ export function openAppointmentModal(appointment, parentContainer, router) {
     <div class="modal-overlay" id="appt-modal-overlay">
       <div class="modal-dialog">
         <div class="modal-header">
-          <div class="modal-title">${isEdit ? 'Modifica Appuntamento / Shooting' : 'Nuovo Appuntamento / Shooting'}</div>
+          <div class="modal-title">${isEdit ? 'Modifica Evento' : 'Nuovo Evento'}</div>
           <button type="button" class="btn btn-sm btn-secondary" id="close-appt-modal-btn">✕</button>
         </div>
 
@@ -252,7 +287,7 @@ export function openAppointmentModal(appointment, parentContainer, router) {
           <div class="modal-body">
             <div class="form-group">
               <label class="form-label">Titolo Evento *</label>
-              <input type="text" id="a-title" class="form-input" value="${appointment?.title || ''}" required placeholder="es. Shooting Laurea Marco / Incontro preventivo" />
+              <input type="text" id="a-title" class="form-input" value="${appointment?.title || ''}" required placeholder="es. Deploy v2.0 / Sprint Demo / Rinnovo Dominio" />
             </div>
 
             <div class="form-row">
@@ -270,18 +305,15 @@ export function openAppointmentModal(appointment, parentContainer, router) {
 
               <div class="form-group" style="flex: 1;">
                 <label class="form-label">Tipo Attività</label>
-                <div style="display: flex; gap: 10px; margin-top: 8px;">
-                  <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-                    <input type="checkbox" id="a-is-shooting" ${appointment?.is_shooting ? 'checked' : ''} />
-                    📸 È uno shooting fotografico
-                  </label>
-                </div>
+                <select id="a-activity-type" class="form-select">
+                  <option value="deploy" ${appointment?.activity_type === 'deploy' ? 'selected' : ''}>🚀 Deploy / Rilascio</option>
+                  <option value="demo" ${appointment?.activity_type === 'demo' ? 'selected' : ''}>💻 Demo / Sprint Review</option>
+                  <option value="call" ${appointment?.activity_type === 'call' ? 'selected' : ''}>📞 Call Tecnica / Allineamento</option>
+                  <option value="server_deadline" ${appointment?.activity_type === 'server_deadline' ? 'selected' : ''}>⏳ Scadenza Server / Dominio / SSL</option>
+                  <option value="general" ${(!appointment?.activity_type || appointment?.activity_type === 'general') && !appointment?.is_shooting ? 'selected' : ''}>🗓️ Incontro Generale</option>
+                  <option value="shooting" ${appointment?.is_shooting || appointment?.activity_type === 'shooting' ? 'selected' : ''}>📸 Shooting Fotografico</option>
+                </select>
               </div>
-            </div>
-
-            <div id="shooting-type-wrapper" class="form-group" style="display: ${appointment?.is_shooting ? 'block' : 'none'};">
-              <label class="form-label">Tipologia Shooting (es. Festa, Laurea, Prodotti, Matrimonio)</label>
-              <input type="text" id="a-shooting-type" class="form-input" value="${appointment?.shooting_type || ''}" placeholder="es. Shooting Laurea" />
             </div>
 
             <div class="form-row">
@@ -297,8 +329,8 @@ export function openAppointmentModal(appointment, parentContainer, router) {
 
             <div class="form-row">
               <div class="form-group" style="flex: 2;">
-                <label class="form-label">Luogo / Indirizzo</label>
-                <input type="text" id="a-location" class="form-input" value="${appointment?.location || ''}" placeholder="Studio, Location esterna o Link riunione" />
+                <label class="form-label">Luogo / Link Meeting</label>
+                <input type="text" id="a-location" class="form-input" value="${appointment?.location || ''}" placeholder="es. Google Meet, Zoom o Sede cliente" />
               </div>
               <div class="form-group" style="flex: 1;">
                 <label class="form-label">Compenso (€)</label>
@@ -308,7 +340,7 @@ export function openAppointmentModal(appointment, parentContainer, router) {
 
             <div class="form-group">
               <label class="form-label">Descrizione / Note operative</label>
-              <textarea id="a-desc" class="form-textarea" rows="2" placeholder="Dettagli, attrezzatura da portare, accordi...">${appointment?.description || ''}</textarea>
+              <textarea id="a-desc" class="form-textarea" rows="2" placeholder="Dettagli rilascio, checklist demo, link PR o credenziali...">${appointment?.description || ''}</textarea>
             </div>
           </div>
 
@@ -332,12 +364,6 @@ export function openAppointmentModal(appointment, parentContainer, router) {
 
   const overlay = div.querySelector('#appt-modal-overlay');
   const form = div.querySelector('#appt-modal-form');
-  const shootingCb = div.querySelector('#a-is-shooting');
-  const shootingWrapper = div.querySelector('#shooting-type-wrapper');
-
-  shootingCb.addEventListener('change', () => {
-    shootingWrapper.style.display = shootingCb.checked ? 'block' : 'none';
-  });
 
   const closeModal = () => div.remove();
   div.querySelector('#close-appt-modal-btn').addEventListener('click', closeModal);
@@ -369,6 +395,8 @@ export function openAppointmentModal(appointment, parentContainer, router) {
     const title = div.querySelector('#a-title').value.trim();
     if (!title) return;
 
+    const activityType = div.querySelector('#a-activity-type').value;
+
     const payload = {
       title,
       client_id: div.querySelector('#a-client').value || null,
@@ -377,8 +405,9 @@ export function openAppointmentModal(appointment, parentContainer, router) {
       location: div.querySelector('#a-location').value.trim(),
       compensation_amount: parseFloat(div.querySelector('#a-compensation').value) || 0,
       description: div.querySelector('#a-desc').value.trim(),
-      is_shooting: shootingCb.checked,
-      shooting_type: div.querySelector('#a-shooting-type').value.trim(),
+      activity_type: activityType,
+      is_shooting: activityType === 'shooting',
+      shooting_type: activityType === 'shooting' ? 'Shooting' : '',
     };
 
     if (isEdit) {

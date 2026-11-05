@@ -549,12 +549,12 @@ export async function openQuoteEditorModal(initialData, parentContainer, router)
           </div>
         </div>
 
-        <!-- Sezione Immagini collegate a QUESTA voce -->
+        <!-- Sezione Allegati Tecnici / Mockup collegati a QUESTA voce -->
         <div style="margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <span style="font-size: 12px; font-weight: 600; color: var(--text-muted);">Immagini di riferimento per questa voce (${(item.images || []).length})</span>
+            <span style="font-size: 12px; font-weight: 600; color: var(--text-muted);">Allegati Tecnici / Mockup / Schema Architettura (${(item.images || []).length})</span>
             <label class="btn btn-sm btn-secondary" style="cursor: pointer;">
-              📷 Aggiungi Foto
+              📎 Aggiungi Allegato/Mockup
               <input type="file" class="it-img-upload" data-index="${index}" accept="image/jpeg,image/png,image/webp" multiple style="display: none;" />
             </label>
           </div>

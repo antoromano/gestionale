@@ -133,7 +133,7 @@ function renderClientProfile(container, clientId, router) {
     return;
   }
 
-  const { client, todos, appointments, quotes, payments } = profile;
+  const { client, todos, appointments, quotes, payments, maintenance_contracts = [], activeMRR = 0 } = profile;
   const isCompany = client.type === 'company';
   const displayName = isCompany ? (client.company_name || 'Azienda') : `${client.first_name || ''} ${client.last_name || ''}`.trim() || 'Cliente';
 
@@ -225,6 +225,98 @@ function renderClientProfile(container, clientId, router) {
           <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Residuo da Incassare</div>
           <div style="font-size: 18px; font-weight: 800; color: ${residualClient > 0 ? 'var(--danger)' : 'var(--text-muted)'}; margin-top: 4px;">${formatCurrency(residualClient)}</div>
         </div>
+        <div style="background: #f0fdf4; padding: 12px; border-radius: var(--radius); border: 1px solid #bbf7d0;">
+          <div style="font-size: 11px; text-transform: uppercase; color: #166534; font-weight: 600;">Canone Ricorrente (MRR)</div>
+          <div style="font-size: 18px; font-weight: 800; color: #166534; margin-top: 4px;">${formatCurrency(activeMRR)}/mese</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ambienti, Git & Manutenzioni -->
+    <div class="grid-2" style="margin-bottom: 20px;">
+      <!-- Ambienti Dev & GitHub -->
+      <div class="card" style="margin-bottom: 0;">
+        <div class="card-header">
+          <div class="card-title">💻 Ambienti & Repository Git</div>
+          <button id="edit-tech-btn" class="btn btn-sm btn-secondary">Modifica</button>
+        </div>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+          ${client.staging_url ? `
+            <a href="${client.staging_url}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary" style="display: inline-flex; align-items: center; gap: 4px;">
+              🌐 Apri Staging ↗
+            </a>
+          ` : '<span style="font-size: 12px; color: var(--text-muted);">Nessun URL Staging</span>'}
+          
+          ${client.production_url ? `
+            <a href="${client.production_url}" target="_blank" rel="noopener" class="btn btn-sm btn-primary" style="display: inline-flex; align-items: center; gap: 4px;">
+              🚀 Apri Produzione ↗
+            </a>
+          ` : '<span style="font-size: 12px; color: var(--text-muted);">Nessun URL Produzione</span>'}
+        </div>
+
+        ${client.stack ? `
+          <div style="margin-bottom: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">STACK TECNOLOGICO</div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              ${client.stack.split(',').map(s => `<span class="badge badge-blue" style="font-size: 11px;">${s.trim()}</span>`).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        ${client.infra_notes ? `
+          <div style="font-size: 12px; background: #f8fafc; padding: 8px; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 12px;">
+            <strong>Infrastruttura:</strong> ${client.infra_notes}
+          </div>
+        ` : ''}
+
+        <!-- GitHub Live Widget -->
+        <div id="github-widget-container" style="background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px;">
+          ${client.github_repo ? `
+            <div id="github-widget-content" data-repo="${client.github_repo}">
+              <div style="font-size: 11px; color: var(--text-muted);">Caricamento commits GitHub...</div>
+            </div>
+          ` : `
+            <div style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 6px;">
+              Nessun repository GitHub collegato. Aggiungi il repository (es. <code>utente/progetto</code>) per visualizzare commits e PR aperte.
+            </div>
+          `}
+        </div>
+      </div>
+
+      <!-- Canoni di Manutenzione Ricorrenti (MRR) -->
+      <div class="card" style="margin-bottom: 0;">
+        <div class="card-header">
+          <div class="card-title">🔄 Canoni di Manutenzione & SLA (${maintenance_contracts.length})</div>
+          <button id="add-contract-btn" class="btn btn-sm btn-primary">+ Aggiungi Canone</button>
+        </div>
+
+        ${maintenance_contracts.length === 0 ? `
+          <div style="text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px;">
+            Nessun canone di manutenzione o SLA registrato.<br>
+            <span style="font-size: 11px;">Aggiungi un canone per tracciare il fatturato ricorrente mensile (MRR).</span>
+          </div>
+        ` : `
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            ${maintenance_contracts.map((c, idx) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+                <div>
+                  <div style="font-weight: 600; font-size: 13px;">${c.title || 'Canone Manutenzione'}</div>
+                  <div style="font-size: 11px; color: var(--text-muted);">
+                    ${formatCurrency(c.amount)} / ${c.frequency === 'annual' ? 'anno' : (c.frequency === 'quarterly' ? 'trimestre' : 'mese')}
+                    ${c.billing_day ? ` • Fatturazione il ${c.billing_day} del mese` : ''}
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-gray'}">
+                    ${c.status === 'active' ? 'Attivo' : 'In pausa'}
+                  </span>
+                  <button class="btn btn-sm btn-danger delete-contract-btn" data-index="${idx}" title="Elimina canone" style="padding: 2px 6px;">✕</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `}
       </div>
     </div>
 
@@ -308,29 +400,38 @@ function renderClientProfile(container, clientId, router) {
           `}
         </div>
 
-        <!-- Appuntamenti & Shooting Fotografici -->
+        <!-- Appuntamenti, Rilasci & Scadenze -->
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Appuntamenti & Shooting (${appointments.length})</div>
+            <div class="card-title">Appuntamenti, Rilasci & Scadenze (${appointments.length})</div>
           </div>
 
           ${appointments.length === 0 ? `
             <div style="text-align: center; padding: 20px; color: var(--text-muted);">
-              Nessun appuntamento in agenda.
+              Nessun evento in agenda.
             </div>
           ` : `
             <div style="display: flex; flex-direction: column; gap: 8px;">
-              ${appointments.map(a => `
-                <div style="padding: 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
-                  <div style="display: flex; justify-content: space-between;">
-                    <div style="font-weight: 600;">${a.title}</div>
-                    <span class="badge ${a.is_shooting ? 'badge-blue' : 'badge-gray'}">${a.is_shooting ? '📸 Shooting' : 'Incontro'}</span>
+              ${appointments.map(a => {
+                let badgeHtml = '<span class="badge badge-gray">🗓️ Incontro</span>';
+                if (a.activity_type === 'deploy') badgeHtml = '<span class="badge badge-blue">🚀 Deploy</span>';
+                else if (a.activity_type === 'demo') badgeHtml = '<span class="badge badge-green">💻 Demo Sprint</span>';
+                else if (a.activity_type === 'call') badgeHtml = '<span class="badge badge-yellow">📞 Call Tecnica</span>';
+                else if (a.activity_type === 'server_deadline') badgeHtml = '<span class="badge badge-red">⏳ Scadenza Server</span>';
+                else if (a.is_shooting) badgeHtml = '<span class="badge badge-blue">📸 Shooting</span>';
+
+                return `
+                  <div style="padding: 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+                    <div style="display: flex; justify-content: space-between;">
+                      <div style="font-weight: 600;">${a.title}</div>
+                      ${badgeHtml}
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+                      🕒 ${formatDateTime(a.start_time)} ${a.location ? `• 📍 ${a.location}` : ''}
+                    </div>
                   </div>
-                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-                    🕒 ${formatDateTime(a.start_time)} ${a.location ? `• 📍 ${a.location}` : ''}
-                  </div>
-                </div>
-              `).join('')}
+                `;
+              }).join('')}
             </div>
           `}
         </div>
@@ -339,6 +440,54 @@ function renderClientProfile(container, clientId, router) {
 
     <div id="client-modal-container"></div>
   `;
+
+  // Caricamento asincrono GitHub Widget
+  const ghWidgetContent = container.querySelector('#github-widget-content');
+  if (ghWidgetContent && client.github_repo) {
+    loadGithubWidget(client.github_repo, ghWidgetContent);
+  }
+
+  // Modifica Dati Tecnici
+  container.querySelector('#edit-tech-btn')?.addEventListener('click', () => {
+    openClientModal(client, container, router);
+  });
+
+  // Aggiungi Canone di Manutenzione
+  container.querySelector('#add-contract-btn')?.addEventListener('click', () => {
+    const title = prompt('Nome del canone (es. SLA Manutenzione & Hosting):', 'Canone Assistenza & Manutenzione');
+    if (!title) return;
+    const amountStr = prompt('Importo periodico in € (es. 300):', '300');
+    const amount = parseFloat(amountStr) || 0;
+    const freqInput = prompt('Frequenza: "mensile", "trimestrale" o "annuale"', 'mensile');
+    let frequency = 'monthly';
+    if (freqInput?.toLowerCase().includes('anno') || freqInput?.toLowerCase().includes('annua')) frequency = 'annual';
+    if (freqInput?.toLowerCase().includes('tri')) frequency = 'quarterly';
+
+    const existingContracts = Array.isArray(client.maintenance_contracts) ? client.maintenance_contracts : [];
+    const newContracts = [...existingContracts, {
+      title,
+      amount,
+      frequency,
+      status: 'active',
+      created_at: new Date().toISOString(),
+    }];
+
+    store.update('clients', clientId, { maintenance_contracts: newContracts });
+    renderClientProfile(container, clientId, router);
+  });
+
+  // Elimina Canone
+  container.querySelectorAll('.delete-contract-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.getAttribute('data-index'), 10);
+      if (confirm('Vuoi rimuovere questo canone di manutenzione?')) {
+        const contracts = [...(client.maintenance_contracts || [])];
+        contracts.splice(idx, 1);
+        store.update('clients', clientId, { maintenance_contracts: contracts });
+        renderClientProfile(container, clientId, router);
+      }
+    });
+  });
 
   // Torna alla lista
   container.querySelector('#back-to-clients-btn')?.addEventListener('click', () => {
@@ -471,17 +620,51 @@ export function openClientModal(client, parentContainer, router) {
             <div class="form-row">
               <div class="form-group" style="flex: 1;">
                 <label class="form-label">Tag (separati da virgola)</label>
-                <input type="text" id="c-tags" class="form-input" value="${(client?.tags || []).join(', ')}" placeholder="VIP, Fotografia, Consulenza" />
+                <input type="text" id="c-tags" class="form-input" value="${(client?.tags || []).join(', ')}" placeholder="SaaS, E-Commerce, Mobile App, VIP" />
               </div>
               <div class="form-group" style="flex: 1;">
                 <label class="form-label">Provenienza / Origine</label>
-                <input type="text" id="c-origin" class="form-input" value="${client?.origin || ''}" placeholder="Passaparola, Sito Web, Instagram" />
+                <input type="text" id="c-origin" class="form-input" value="${client?.origin || ''}" placeholder="Passaparola, LinkedIn, GitHub, Referral" />
+              </div>
+            </div>
+
+            <!-- Dati Tecnici & Ambienti Dev -->
+            <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px;">
+              <div style="font-weight: 700; font-size: 13px; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                💻 Ambienti & Repository Git (Configurazione Dev)
+              </div>
+              
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
+                  <label class="form-label">Ambiente Staging / Test (URL)</label>
+                  <input type="url" id="c-staging-url" class="form-input" value="${client?.staging_url || ''}" placeholder="https://staging.tuocliente.it" />
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label class="form-label">Ambiente Produzione (URL)</label>
+                  <input type="url" id="c-production-url" class="form-input" value="${client?.production_url || ''}" placeholder="https://www.tuocliente.it" />
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
+                  <label class="form-label">Repository GitHub (owner/repo)</label>
+                  <input type="text" id="c-github-repo" class="form-input" value="${client?.github_repo || ''}" placeholder="es. antoromano/nome-progetto" />
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label class="form-label">Stack Tecnologico</label>
+                  <input type="text" id="c-stack" class="form-input" value="${client?.stack || ''}" placeholder="es. Next.js, Supabase, Tailwind, Vercel" />
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label">Note Infrastruttura & Hosting</label>
+                <input type="text" id="c-infra-notes" class="form-input" value="${client?.infra_notes || ''}" placeholder="es. Vercel Pro + Hetzner VPS (Docker), DNS su Cloudflare" />
               </div>
             </div>
 
             <div class="form-group">
-              <label class="form-label">Note</label>
-              <textarea id="c-notes" class="form-textarea" rows="2" placeholder="Note operative, preferenze o dettagli contrattuali...">${client?.notes || ''}</textarea>
+              <label class="form-label">Note Generali</label>
+              <textarea id="c-notes" class="form-textarea" rows="2" placeholder="Note operative, preferenze o accordi contrattuali...">${client?.notes || ''}</textarea>
             </div>
           </div>
 
@@ -549,6 +732,11 @@ export function openClientModal(client, parentContainer, router) {
       sdi_code: div.querySelector('#c-sdi').value.trim(),
       tags,
       origin: div.querySelector('#c-origin').value.trim(),
+      staging_url: div.querySelector('#c-staging-url').value.trim(),
+      production_url: div.querySelector('#c-production-url').value.trim(),
+      github_repo: div.querySelector('#c-github-repo').value.trim(),
+      stack: div.querySelector('#c-stack').value.trim(),
+      infra_notes: div.querySelector('#c-infra-notes').value.trim(),
       notes: div.querySelector('#c-notes').value.trim(),
     };
 
@@ -561,4 +749,96 @@ export function openClientModal(client, parentContainer, router) {
     closeModal();
     renderClients(parentContainer, router);
   });
+}
+
+/**
+ * Caricamento widget GitHub (commits e pull request recenti)
+ */
+async function loadGithubWidget(repoString, containerEl) {
+  if (!containerEl || !repoString) return;
+  const clean = repoString.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').trim();
+  if (!clean.includes('/')) return;
+
+  containerEl.innerHTML = `<div style="font-size: 11px; color: var(--text-muted);">Caricamento dati GitHub (${clean})...</div>`;
+  try {
+    const settings = store.getSettings();
+    const headers = { Accept: 'application/vnd.github.v3+json' };
+    if (settings.github_token) {
+      headers.Authorization = `token ${settings.github_token}`;
+    }
+
+    const [commitsRes, pullsRes] = await Promise.all([
+      fetch(`https://api.github.com/repos/${clean}/commits?per_page=3`, { headers }),
+      fetch(`https://api.github.com/repos/${clean}/pulls?state=open&per_page=3`, { headers }),
+    ]);
+
+    if (!commitsRes.ok && (commitsRes.status === 404 || commitsRes.status === 403)) {
+      containerEl.innerHTML = `
+        <div style="font-size: 12px; color: var(--text-muted); display: flex; align-items: center; justify-content: space-between;">
+          <span>Repo: <a href="https://github.com/${clean}" target="_blank" rel="noopener" style="font-weight: 600; color: var(--accent);">${clean}</a></span>
+          <span class="badge badge-gray">${commitsRes.status === 403 ? 'Rate limit o privato' : 'Repo non trovato'}</span>
+        </div>
+      `;
+      return;
+    }
+
+    const commits = commitsRes.ok ? await commitsRes.json() : [];
+    const pulls = pullsRes.ok ? await pullsRes.json() : [];
+
+    let commitsHtml = '';
+    if (Array.isArray(commits) && commits.length > 0) {
+      commitsHtml = `
+        <div style="margin-top: 6px;">
+          <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">ULTIMI COMMITS</div>
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            ${commits.map(c => `
+              <div style="font-size: 12px; display: flex; justify-content: space-between; align-items: center; background: #ffffff; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);">
+                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%;">
+                  <span style="font-family: monospace; font-size: 10px; color: var(--accent); font-weight: bold;">${c.sha ? c.sha.substring(0, 7) : ''}</span>
+                  <span>${c.commit?.message?.split('\n')[0] || 'Commit'}</span>
+                </div>
+                <span style="font-size: 10px; color: var(--text-muted);">${c.commit?.author?.name || ''}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    let pullsHtml = '';
+    if (Array.isArray(pulls) && pulls.length > 0) {
+      pullsHtml = `
+        <div style="margin-top: 8px;">
+          <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">PULL REQUEST APERTE (${pulls.length})</div>
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            ${pulls.map(p => `
+              <div style="font-size: 12px; display: flex; justify-content: space-between; align-items: center; background: #ffffff; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);">
+                <a href="${p.html_url}" target="_blank" rel="noopener" style="color: var(--accent); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;">
+                  #${p.number} ${p.title}
+                </a>
+                <span class="badge badge-green" style="font-size: 10px;">Aperta</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    containerEl.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <div style="font-size: 12px; font-weight: 600;">
+          🐙 <a href="https://github.com/${clean}" target="_blank" rel="noopener" style="color: var(--text-main);">${clean}</a>
+        </div>
+        <a href="https://github.com/${clean}" target="_blank" rel="noopener" class="btn btn-sm btn-secondary" style="font-size: 10px; padding: 2px 6px;">Apri GitHub ↗</a>
+      </div>
+      ${commitsHtml || '<div style="font-size: 11px; color: var(--text-muted);">Nessun commit recente recuperabile.</div>'}
+      ${pullsHtml}
+    `;
+  } catch (err) {
+    containerEl.innerHTML = `
+      <div style="font-size: 12px; color: var(--text-muted);">
+        Repo: <a href="https://github.com/${clean}" target="_blank" rel="noopener">${clean}</a> (Non raggiungibile al momento)
+      </div>
+    `;
+  }
 }

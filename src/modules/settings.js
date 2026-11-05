@@ -242,6 +242,20 @@ export function renderSettings(container, router) {
                 Abilita sincronizzazione Notion
               </label>
             </div>
+
+            <!-- GitHub Integration -->
+            <div style="padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); margin-top: 10px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="font-weight: 700;">GitHub Integration (Commits & PRs)</span>
+                <span class="badge ${settings.github_token ? 'badge-green' : 'badge-blue'}">
+                  ${settings.github_token ? 'Token Configurato' : 'Accesso Pubblico Diretto'}
+                </span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
+                I repository pubblici funzionano automaticamente senza credenziali. Inserisci un Personal Access Token GitHub (classic) con permesso <code>repo</code> solo se devi leggere repository privati.
+              </div>
+              <input type="password" id="set-github-token" class="form-input" value="${settings.github_token || ''}" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx (facoltativo)" />
+            </div>
           </div>
         </div>
 
@@ -343,6 +357,7 @@ export function renderSettings(container, router) {
       supabase_anon_key: container.querySelector('#set-supabase-key').value.trim(),
       google_calendar_connected: container.querySelector('#set-gcal-connected').checked,
       notion_connected: container.querySelector('#set-notion-connected').checked,
+      github_token: container.querySelector('#set-github-token').value.trim(),
     };
 
     store.updateSettings(updated);

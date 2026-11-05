@@ -237,3 +237,55 @@ describe('7. Intelligenza Artificiale & Smart Parser Multitask', () => {
     expect(photoItem.client_id === 'c-a' || photoItem.client_name_proposed === 'Cliente A').toBe(true);
   });
 });
+
+describe('8. Workflow Software Engineer: Ambienti, MRR & Onboarding IA', () => {
+  it('calcola correttamente il fatturato ricorrente mensile (MRR) e annuale (ARR)', () => {
+    const clients = [
+      {
+        id: 'c-1',
+        company_name: 'TechCorp',
+        maintenance_contracts: [
+          { title: 'SLA Base', amount: 300, frequency: 'monthly', status: 'active' },
+          { title: 'Hosting Dedicato', amount: 50, frequency: 'monthly', status: 'active' },
+          { title: 'Contratto Sospeso', amount: 100, frequency: 'monthly', status: 'paused' },
+        ],
+      },
+      {
+        id: 'c-2',
+        company_name: 'Nexus Commerce',
+        maintenance_contracts: [
+          { title: 'Manutenzione Annuale', amount: 1200, frequency: 'annual', status: 'active' }, // 1200 / 12 = 100/m
+        ],
+      },
+    ];
+
+    const report = calculateFinancialReport({ clients, quotes: [], todos: [], payments: [], expenses: [] });
+    // MRR = 300 + 50 + 100 (da annuale 1200/12) = 450
+    expect(report.mrr).toBe(450.00);
+    expect(report.activeContractsCount).toBe(3);
+  });
+
+  it('l\'assistente IA riconosce e on-boarda un cliente storico con repo, ambienti e canone', async () => {
+    const prompt = 'Lavoro da mesi con Marco di TechCorp, sito https://www.techcorp.it, staging https://stage.techcorp.dev, repo antoromano/techcorp-web, stack Next.js e Supabase, canone manutenzione 300€/mese. Devo fare deploy mercoledì alle 15.';
+
+    const result = await processAiPrompt({ prompt });
+    expect(result).toBeDefined();
+    expect(result.clients_to_create).toBeDefined();
+    expect(result.clients_to_create.length).toBeGreaterThan(0);
+
+    const client = result.clients_to_create[0];
+    expect(client.company_name).toContain('TechCorp');
+    expect(client.first_name).toBe('Marco');
+    expect(client.production_url).toBe('https://www.techcorp.it');
+    expect(client.staging_url).toBe('https://stage.techcorp.dev');
+    expect(client.github_repo).toBe('antoromano/techcorp-web');
+    expect(client.stack).toContain('Next.js');
+    expect(client.maintenance_amount).toBe(300);
+    expect(client.maintenance_frequency).toBe('monthly');
+
+    // Verifica che abbia estratto anche l'appuntamento di tipo deploy
+    const deployAppt = result.appointments.find(a => a.activity_type === 'deploy' || a.title.toLowerCase().includes('deploy'));
+    expect(deployAppt).toBeDefined();
+    expect(deployAppt.activity_type).toBe('deploy');
+  });
+});

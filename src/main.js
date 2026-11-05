@@ -11,6 +11,7 @@ import { renderExpenses } from './modules/expenses.js';
 import { renderReports } from './modules/reports.js';
 import { renderCatalog } from './modules/catalog.js';
 import { renderSettings } from './modules/settings.js';
+import { renderHelp } from './modules/help.js';
 import { renderTrash } from './modules/trash.js';
 import { openAiModal } from './modules/ai-assistant.js';
 import { exportFullBackup, openImportModal } from './modules/backup.js';
@@ -38,6 +39,7 @@ class Router {
       reports: { title: 'Report Finanziari', render: renderReports },
       catalog: { title: 'Catalogo Servizi', render: renderCatalog },
       settings: { title: 'Impostazioni', render: renderSettings },
+      help: { title: 'Guida & FAQ', render: renderHelp },
       trash: { title: 'Cestino', render: renderTrash },
     };
 

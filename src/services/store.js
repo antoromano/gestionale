@@ -43,6 +43,8 @@ export const defaultSettings = {
   notion_database_id: '',
   notion_sync_last_at: null,
   gemini_api_key: '',
+  business_type: 'software_dev',
+  github_token: '',
   supabase_url: '',
   supabase_anon_key: '',
 };
@@ -330,6 +332,16 @@ class Store {
     const payments = this.getAll('payments').filter(p => p.client_id === clientId);
     const expenses = this.getAll('expenses').filter(e => e.client_id === clientId);
 
+    const maintenance_contracts = Array.isArray(client.maintenance_contracts) ? client.maintenance_contracts : [];
+    const activeMRR = maintenance_contracts
+      .filter(c => c.status === 'active')
+      .reduce((sum, c) => {
+        const val = Number(c.amount) || 0;
+        if (c.frequency === 'annual') return sum + (val / 12);
+        if (c.frequency === 'quarterly') return sum + (val / 3);
+        return sum + val;
+      }, 0);
+
     return {
       client,
       todos,
@@ -337,6 +349,8 @@ class Store {
       quotes,
       payments,
       expenses,
+      maintenance_contracts,
+      activeMRR,
     };
   }
 

@@ -85,3 +85,4 @@ CREATE POLICY "Users can manage own body_daily_logs" ON public.body_daily_logs
 CREATE POLICY "Users can manage own body_workout_entries" ON public.body_workout_entries
     FOR ALL USING ((select auth.uid()) = user_id)
     WITH CHECK ((select auth.uid()) = user_id);
+

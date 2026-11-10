@@ -1185,3 +1185,4 @@ function seedNotebookSampleData() {
 
   store.upsertBodyDailyLog({ date: d0, sleep_hours: 7.5, body_weight_kg: 75.1, calories_kcal: 2500, protein_g: 165, carbs_g: 285, fat_g: 75 });
 }
+

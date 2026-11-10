@@ -14,8 +14,12 @@ import {
   syncClientToBrain,
 } from '../services/brain.js';
 import { formatDateTime } from '../utils/formatters.js';
+import { icon } from '../utils/icons.js';
+import { mountForceGraph3D, mountNeuralOrb3D, attachSpringTiltCards } from '../utils/three-scenes.js';
 
 let activeTab = 'facts'; // 'facts' | 'memories' | 'graph'
+let activeGraph3DInstance = null;
+let activeOrb3DInstance = null;
 let selectedDomainCapture = 'work';
 let memoryDomainFilter = 'all';
 let memoryTagFilter = '';
@@ -40,43 +44,57 @@ export function renderBrain(container, router) {
   const { nodes, edges } = store.getBrainGraph();
 
   container.innerHTML = `
+    <!-- GUIDA COLLASSABILE (PROGRESSIVE DISCLOSURE) -->
+    <details class="ux-guide-callout">
+      <summary>
+        <span>${icon('info', 14)} Architettura Cognitiva Tri-Layer Ibrida (Come funziona il Second Brain)</span>
+        <span class="badge badge-gray mono">3 Livelli • GraphRAG</span>
+      </summary>
+      <div class="callout-body">
+        Il <strong>Second Brain</strong> opera su 3 livelli sincronizzati su Supabase PostgreSQL:
+        <strong>1. Archivio Semantico (pgvector 768-dim)</strong> per appunti e note vettoriali;
+        <strong>2. Fatti Atomici (Pattern Mem0)</strong> che aggiornano lo stato corrente mantenendo l'evoluzione storica;
+        <strong>3. Knowledge Graph Relazionale (3D Force-Directed + 2-Hop)</strong> per scoprire correlazioni dirette e indirette tra clienti, stack, decisioni e metriche Body.
+      </div>
+    </details>
+
     <!-- KPI STATISTICHE TRI-LAYER -->
-    <div class="grid-4" style="margin-bottom: 20px;">
-      <div class="card" style="margin-bottom: 0; padding: 16px; border-left: 4px solid #2563eb;">
-        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Livello 1 • Memorie Semantiche</div>
-        <div style="font-size: 24px; font-weight: 800; color: var(--text-main); margin-top: 4px;">${memories.length}</div>
+    <div class="grid-4" style="margin-bottom: 18px;">
+      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">Livello 1 • Memorie Semantiche</div>
+        <div class="mono" style="font-size: 24px; font-weight: 700; color: var(--text-main); margin-top: 4px;">${memories.length}</div>
         <div style="font-size: 11px; color: var(--text-muted);">Embedding 768-dim & Tag GIN</div>
       </div>
 
-      <div class="card" style="margin-bottom: 0; padding: 16px; border-left: 4px solid #16a34a;">
-        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Livello 2 • Fatti Attivi (Mem0)</div>
-        <div style="font-size: 24px; font-weight: 800; color: #16a34a; margin-top: 4px;">${activeFacts.length}</div>
-        <div style="font-size: 11px; color: var(--text-muted);">${allFacts.length - activeFacts.length} versioni storiche archiviate</div>
+      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">Livello 2 • Fatti Attivi (Mem0)</div>
+        <div class="mono" style="font-size: 24px; font-weight: 700; color: var(--success); margin-top: 4px;">${activeFacts.length}</div>
+        <div style="font-size: 11px; color: var(--text-muted);"><span class="mono">${allFacts.length - activeFacts.length}</span> versioni storiche archiviate</div>
       </div>
 
-      <div class="card" style="margin-bottom: 0; padding: 16px; border-left: 4px solid #7c3aed;">
-        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Livello 3 • Nodi Knowledge Graph</div>
-        <div style="font-size: 24px; font-weight: 800; color: #7c3aed; margin-top: 4px;">${nodes.length}</div>
-        <div style="font-size: 11px; color: var(--text-muted);">Entità tipizzate univoche</div>
+      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">Livello 3 • Nodi Knowledge Graph</div>
+        <div class="mono" style="font-size: 24px; font-weight: 700; color: #6d28d9; margin-top: 4px;">${nodes.length}</div>
+        <div style="font-size: 11px; color: var(--text-muted);">Entità tipizzate in 3D</div>
       </div>
 
-      <div class="card" style="margin-bottom: 0; padding: 16px; border-left: 4px solid #d97706;">
-        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Livello 3 • Relazioni & Archi</div>
-        <div style="font-size: 24px; font-weight: 800; color: #d97706; margin-top: 4px;">${edges.length}</div>
+      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">Livello 3 • Relazioni & Archi</div>
+        <div class="mono" style="font-size: 24px; font-weight: 700; color: var(--warning); margin-top: 4px;">${edges.length}</div>
         <div style="font-size: 11px; color: var(--text-muted);">Connessioni pesate (2-Hop GraphRAG)</div>
       </div>
     </div>
 
     <!-- SEZIONE 1 & 2: CATTURA COGNITIVA RAPIDA + INTERROGAZIONE IBRIDA -->
-    <div class="grid-2" style="margin-bottom: 22px;">
+    <div class="grid-2" style="margin-bottom: 18px;">
       <!-- 1. CATTURA COGNITIVA RAPIDA ("Aggiungi al Second Brain") -->
-      <div class="card" style="margin-bottom: 0; border-top: 3px solid var(--accent);">
+      <div class="card" style="margin-bottom: 0;">
         <div class="card-header" style="margin-bottom: 12px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 20px;">🧠</span>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div id="brain-neural-orb-canvas" title="Nucleo Cognitivo 3D Interattivo (Three.js)" style="width: 44px; height: 44px; border-radius: 10px; background: #09090b; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(99,102,241,0.3);"></div>
             <div>
               <div class="card-title">Aggiungi al Second Brain</div>
-              <div style="font-size: 11px; color: var(--text-muted);">Salva memoria semantica ed estrae automaticamente Fatti (Mem0) e Relazioni del Grafo</div>
+              <div style="font-size: 11.5px; color: var(--text-muted);">Estrae automaticamente Fatti (Mem0) e Relazioni del Grafo</div>
             </div>
           </div>
         </div>
@@ -121,16 +139,16 @@ export function renderBrain(container, router) {
               class="form-textarea"
               rows="3"
               required
-              placeholder="Scrivi o detta un appunto... Es: 'TechCorp usa Next.js e Supabase, canone MRR 450€/mese. Supabase richiede Row Level Security.' oppure 'Massimale pull-up: 16 ripetizioni, target kcal: 2450 kcal. Stretching riduce affaticamento lombi.'"
+              placeholder="Scrivi o detta un appunto... Es: 'TechCorp usa Next.js e Supabase, canone MRR 450€/mese.' oppure 'Massimale pull-up: 16 ripetizioni, target kcal: 2450 kcal.'"
             ></textarea>
           </div>
 
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
             <button type="button" id="brain-voice-dictate-btn" class="btn btn-sm btn-secondary">
-              🎙️ Dettatura Vocale
+              ${icon('mic', 13)} <span>Dettatura Vocale</span>
             </button>
             <button type="submit" id="brain-ingest-submit-btn" class="btn btn-ai">
-              ⚡ Memorizza & Estrai Conoscenza
+              ${icon('sparkles', 14)} <span>Memorizza & Estrai Conoscenza</span>
             </button>
           </div>
         </form>
@@ -140,35 +158,35 @@ export function renderBrain(container, router) {
       </div>
 
       <!-- 2. INTERROGAZIONE IBRIDA ("Chiedi al Second Brain") -->
-      <div class="card" style="margin-bottom: 0; border-top: 3px solid #7c3aed; display: flex; flex-direction: column;">
+      <div class="card" style="margin-bottom: 0; display: flex; flex-direction: column;">
         <div class="card-header" style="margin-bottom: 12px;">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 20px;">🔮</span>
+            ${icon('network', 18)}
             <div>
               <div class="card-title">Chiedi al Second Brain (Hybrid GraphRAG)</div>
-              <div style="font-size: 11px; color: var(--text-muted);">Interroga simultaneamente Memorie Vettoriali, Fatti Attivi Mem0 e Grafo a 2 Hop</div>
+              <div style="font-size: 11.5px; color: var(--text-muted);">Interroga Memorie Vettoriali, Fatti Attivi Mem0 e Grafo a 2 Hop</div>
             </div>
           </div>
         </div>
 
-        <form id="brain-query-form" style="margin-bottom: 12px;">
+        <form id="brain-query-form" style="margin-bottom: 10px;">
           <div style="display: flex; gap: 8px;">
             <input
               type="text"
               id="brain-query-input"
               class="form-input"
-              placeholder="Fai una domanda su clienti, stack, decisioni, metriche body o correlazioni..."
+              placeholder="Chiedi su clienti, stack, decisioni, metriche body o correlazioni..."
               value="${lastQueryResponse?.query || ''}"
             />
             <button type="submit" class="btn btn-primary">
-              🔍 Chiedi
+              ${icon('search', 14)} <span>Chiedi</span>
             </button>
           </div>
         </form>
 
         <!-- Suggerimenti rapidi di query -->
         <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px;">
-          <span style="font-size: 11px; color: var(--text-muted); align-self: center;">Prova:</span>
+          <span style="font-size: 11px; color: var(--text-muted); align-self: center;">Query rapide:</span>
           <button type="button" class="btn btn-sm btn-secondary quick-brain-query" data-q="Qual è lo stack e il canone dei clienti?" style="font-size: 11px; padding: 2px 8px;">Stack & MRR Clienti</button>
           <button type="button" class="btn btn-sm btn-secondary quick-brain-query" data-q="Antonio" style="font-size: 11px; padding: 2px 8px;">Stato & Regole Antonio</button>
           <button type="button" class="btn btn-sm btn-secondary quick-brain-query" data-q="Allenamento kcal pull-up" style="font-size: 11px; padding: 2px 8px;">Metriche Body & Salute</button>
@@ -177,46 +195,44 @@ export function renderBrain(container, router) {
         <!-- Risultato Interrogazione Ibrida -->
         <div id="brain-query-result-box" style="flex: 1;">
           ${lastQueryResponse ? renderHybridQueryResult(lastQueryResponse) : `
-            <div style="background: #f8fafc; border: 1px dashed var(--border); border-radius: var(--radius); padding: 22px; text-align: center; color: var(--text-muted); font-size: 12px;">
+            <div style="background: #fafafa; border: 1px dashed var(--border); border-radius: var(--radius); padding: 22px; text-align: center; color: var(--text-muted); font-size: 12px;">
               Inserisci una domanda per attivare il motore <strong>Hybrid GraphRAG</strong>.<br>
-              Vedrai la risposta sintetizzata con le citazioni esatte da <strong>Fatti Mem0</strong>, <strong>Memorie Semantiche</strong> e <strong>Knowledge Graph (1-2 Hop)</strong>.
+              Risposta sintetizzata con citazioni da <strong>Fatti Mem0</strong>, <strong>Memorie Semantiche</strong> e <strong>Knowledge Graph (1-2 Hop)</strong>.
             </div>
           `}
         </div>
       </div>
     </div>
 
-    <!-- BARRA DI NAVIGAZIONE DELLE 3 TAB DI ESPLORAZIONE E GESTIONE -->
-    <div class="card" style="padding: 12px 16px; margin-bottom: 20px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button
-            type="button"
-            class="btn ${activeTab === 'facts' ? 'btn-primary' : 'btn-secondary'} brain-tab-btn"
-            data-tab="facts"
-          >
-            📌 Tab 1: Fatti Attivi & Evoluzione (Mem0) <span class="badge" style="background: rgba(0,0,0,0.12); color: inherit;">${activeFacts.length}</span>
-          </button>
-          <button
-            type="button"
-            class="btn ${activeTab === 'memories' ? 'btn-primary' : 'btn-secondary'} brain-tab-btn"
-            data-tab="memories"
-          >
-            📚 Tab 2: Archivio Semantico (Memorie) <span class="badge" style="background: rgba(0,0,0,0.12); color: inherit;">${memories.length}</span>
-          </button>
-          <button
-            type="button"
-            class="btn ${activeTab === 'graph' ? 'btn-primary' : 'btn-secondary'} brain-tab-btn"
-            data-tab="graph"
-          >
-            🕸️ Tab 3: Mappa Knowledge Graph <span class="badge" style="background: rgba(0,0,0,0.12); color: inherit;">${nodes.length} nodi • ${edges.length} archi</span>
-          </button>
-        </div>
-
-        <button type="button" id="brain-sync-clients-btn" class="btn btn-sm btn-secondary" title="Sincronizza tutti i clienti e to-do del Gestionale nel Second Brain">
-          🔄 Sincronizza dal Gestionale
+    <!-- BARRA DI NAVIGAZIONE DELLE 3 TAB (SEGMENTED CONTROL) -->
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 18px;">
+      <div class="segmented-tabs">
+        <button
+          type="button"
+          class="segmented-tab-btn brain-tab-btn ${activeTab === 'facts' ? 'active' : ''}"
+          data-tab="facts"
+        >
+          Fatti Attivi & Evoluzione (Mem0) <span class="badge badge-gray mono" style="padding:0 6px;font-size:10px;">${activeFacts.length}</span>
+        </button>
+        <button
+          type="button"
+          class="segmented-tab-btn brain-tab-btn ${activeTab === 'memories' ? 'active' : ''}"
+          data-tab="memories"
+        >
+          Archivio Semantico <span class="badge badge-gray mono" style="padding:0 6px;font-size:10px;">${memories.length}</span>
+        </button>
+        <button
+          type="button"
+          class="segmented-tab-btn brain-tab-btn ${activeTab === 'graph' ? 'active' : ''}"
+          data-tab="graph"
+        >
+          ${icon('cube', 13)} Mappa Knowledge Graph 3D <span class="badge badge-gray mono" style="padding:0 6px;font-size:10px;">${nodes.length} nodi • ${edges.length} archi</span>
         </button>
       </div>
+
+      <button type="button" id="brain-sync-clients-btn" class="btn btn-sm btn-secondary" title="Sincronizza tutti i clienti e to-do del Gestionale nel Second Brain">
+        Sincronizza dal Gestionale
+      </button>
     </div>
 
     <!-- CONTENUTO DELLA TAB ATTIVA -->
@@ -658,10 +674,25 @@ function renderGraphTab(nodes, edges) {
   }
 
   return `
+    <!-- SCENA 3D THREE.JS: KNOWLEDGE GRAPH RELAZIONALE 3D FORCE-DIRECTED -->
+    <div class="card" style="margin-bottom: 18px; padding: 0; overflow: hidden; background: #09090b; border: 1px solid #27272a;">
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #27272a; flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="color: #818cf8; display: inline-flex;">${icon('cube', 16)}</span>
+          <span style="font-weight: 600; font-size: 13px; color: #f4f4f5; letter-spacing: -0.01em;">Mappa Spaziale 3D • Force-Directed Knowledge Graph (Three.js Physics)</span>
+          <span class="badge mono" style="background: rgba(99,102,241,0.18); color: #a5b4fc; border: 1px solid rgba(99,102,241,0.3); font-size: 10px;">Coulomb + Hooke 3D</span>
+        </div>
+        <div style="font-size: 11px; color: #a1a1aa; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <span>Trascina per ruotare • Scroll per zoom • Clicca una sfera 3D per ispezionare</span>
+        </div>
+      </div>
+      <div id="brain-graph-3d-canvas" style="width: 100%; height: 360px; position: relative;"></div>
+    </div>
+
     <!-- Form rapido per aggiungere manualmente una Relazione nel Grafo -->
-    <div class="card" style="margin-bottom: 20px; background: #f8fafc;">
-      <div style="font-weight: 700; font-size: 13px; margin-bottom: 10px; color: var(--text-main);">
-        🕸️ Aggiungi Connessione Manuale al Knowledge Graph
+    <div class="card" style="margin-bottom: 20px; background: #fafafa;">
+      <div style="font-weight: 600; font-size: 13px; margin-bottom: 10px; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
+        ${icon('plus', 14)} <span>Aggiungi Connessione Manuale al Knowledge Graph</span>
       </div>
       <form id="manual-edge-form" class="form-row" style="flex-wrap: wrap; align-items: flex-end;">
         <div style="flex: 1.2; min-width: 140px;">
@@ -831,6 +862,51 @@ function renderGraphTab(nodes, edges) {
 }
 
 function bindBrainEvents(container, router) {
+  attachSpringTiltCards(container);
+
+  // Monta il Nucleo Cognitivo 3D (Neural Orb) nell'header Second Brain
+  if (activeOrb3DInstance?.destroy) {
+    activeOrb3DInstance.destroy();
+    activeOrb3DInstance = null;
+  }
+  const orbCanvasEl = container.querySelector('#brain-neural-orb-canvas');
+  if (orbCanvasEl) {
+    activeOrb3DInstance = mountNeuralOrb3D(orbCanvasEl, { size: 44, initialState: 'idle' });
+  }
+
+  // Reattività fisica del Nucleo 3D quando l'utente digita
+  const ingestTxt = container.querySelector('#brain-ingest-text');
+  const queryTxt = container.querySelector('#brain-query-input');
+  let orbIdleTimer = null;
+  const pulseOrb = () => {
+    activeOrb3DInstance?.setEnergy('active');
+    if (orbIdleTimer) clearTimeout(orbIdleTimer);
+    orbIdleTimer = setTimeout(() => activeOrb3DInstance?.setEnergy('idle'), 1200);
+  };
+  ingestTxt?.addEventListener('input', pulseOrb);
+  queryTxt?.addEventListener('input', pulseOrb);
+
+  // Monta il Knowledge Graph 3D Force-Directed quando il Tab 3 è attivo
+  if (activeGraph3DInstance?.destroy) {
+    activeGraph3DInstance.destroy();
+    activeGraph3DInstance = null;
+  }
+  const graph3DCanvas = container.querySelector('#brain-graph-3d-canvas');
+  if (graph3DCanvas && activeTab === 'graph') {
+    const { nodes, edges } = store.getBrainGraph();
+    const filteredNodes = nodes.filter(n => graphTypeFilter === 'all' || n.node_type === graphTypeFilter);
+    const activeSel = selectedGraphNodeId || (filteredNodes[0]?.id ?? null);
+    activeGraph3DInstance = mountForceGraph3D(graph3DCanvas, {
+      nodes: filteredNodes,
+      edges,
+      selectedNodeId: activeSel,
+      onSelectNode: (clickedId) => {
+        selectedGraphNodeId = clickedId;
+        renderBrain(container, router);
+      },
+    });
+  }
+
   // Scelta rapida dominio cattura
   container.querySelectorAll('.brain-domain-pill').forEach(btn => {
     btn.addEventListener('click', () => {

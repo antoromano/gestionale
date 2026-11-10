@@ -6,6 +6,7 @@ import { processAiPrompt } from '../services/ai.js';
 import { ingestKnowledge, BRAIN_DOMAINS } from '../services/brain.js';
 import { formatCurrency, formatDateTime } from '../utils/formatters.js';
 import { parseWorkoutNotation } from '../utils/body-parser.js';
+import { mountNeuralOrb3D } from '../utils/three-scenes.js';
 
 export function openAiModal(options = {}) {
   const { preselectedClientId = null, onSaved = null } = options;
@@ -17,13 +18,13 @@ export function openAiModal(options = {}) {
   const modalHtml = `
     <div class="modal-overlay" id="ai-assistant-overlay">
       <div class="modal-dialog modal-lg" style="max-height: 92vh;">
-        <div class="modal-header" style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); color: #ffffff;">
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <span style="font-size: 20px;">✨</span>
+        <div class="modal-header" style="background: #09090b; color: #ffffff; border-bottom: 1px solid #27272a;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div id="ai-modal-orb-canvas" title="Nucleo Cognitivo 3D Interattivo (Three.js)" style="width: 44px; height: 44px; border-radius: 10px; background: #18181b; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(99,102,241,0.35);"></div>
             <div>
-              <div class="modal-title" style="color: #ffffff;">Assistente Operativo IA</div>
-              <div style="font-size: 11px; color: #94a3b8;">
-                ${preselectedName ? `Contesto cliente attivo: <strong>${preselectedName}</strong>` : 'Analizza testo, foto o note vocali ed estrae To-do e Appuntamenti'}
+              <div class="modal-title" style="color: #ffffff; letter-spacing: -0.02em;">Assistente Operativo IA & Second Brain</div>
+              <div style="font-size: 11px; color: #a1a1aa;">
+                ${preselectedName ? `Contesto cliente attivo: <strong>${preselectedName}</strong>` : 'Analizza testo, foto o note vocali ed estrae To-do, Eventi, Body Log e Fatti Mem0'}
               </div>
             </div>
           </div>
@@ -159,6 +160,10 @@ export function openAiModal(options = {}) {
   div.innerHTML = modalHtml;
   document.body.appendChild(div);
 
+  // Monta il Nucleo Cognitivo 3D nell'header della modale IA
+  const modalOrbEl = div.querySelector('#ai-modal-orb-canvas');
+  const modalOrbInstance = modalOrbEl ? mountNeuralOrb3D(modalOrbEl, { size: 44, initialState: 'idle' }) : null;
+
   const overlay = div.querySelector('#ai-assistant-overlay');
   const inputSection = div.querySelector('#ai-input-section');
   const loadingSection = div.querySelector('#ai-loading-section');
@@ -166,6 +171,13 @@ export function openAiModal(options = {}) {
   const retryBtn = div.querySelector('#ai-retry-btn');
   const confirmBtn = div.querySelector('#ai-confirm-save-btn');
   const textInput = div.querySelector('#ai-text-input');
+
+  let orbTypingTimer = null;
+  textInput?.addEventListener('input', () => {
+    modalOrbInstance?.setEnergy('active');
+    if (orbTypingTimer) clearTimeout(orbTypingTimer);
+    orbTypingTimer = setTimeout(() => modalOrbInstance?.setEnergy('idle'), 1200);
+  });
 
   let currentParsedResult = null;
   let attachedImageBase64 = null;
@@ -769,7 +781,10 @@ export function openAiModal(options = {}) {
     if (onSaved) onSaved();
   });
 
-  const closeModal = () => div.remove();
+  const closeModal = () => {
+    modalOrbInstance?.destroy?.();
+    div.remove();
+  };
   div.querySelector('#close-ai-modal-btn').addEventListener('click', closeModal);
   div.querySelector('#ai-cancel-btn').addEventListener('click', closeModal);
 

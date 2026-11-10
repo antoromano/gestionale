@@ -6,9 +6,12 @@ import { formatCurrency, formatDate, formatDateTime, formatMonthYear } from '../
 import { calculateQuoteTotals, calculatePaymentBalance } from '../utils/calculations.js';
 import { openTodoModal } from './todos.js';
 import { openAiModal } from './ai-assistant.js';
+import { icon } from '../utils/icons.js';
+import { attachSpringTiltCards } from '../utils/three-scenes.js';
 
 let activeClientId = null;
 let clientSearchQuery = '';
+let activeClientTab = 'all'; // 'all' | 'todos' | 'tech' | 'billing' | 'events'
 
 export function renderClients(container, router) {
   if (activeClientId) {
@@ -58,23 +61,24 @@ export function renderClients(container, router) {
           const sub = isCompany && c.contact_person ? `Ref: ${c.contact_person}` : (!isCompany && c.company_name ? c.company_name : '');
 
           return `
-            <div class="card client-card" data-id="${c.id}" style="cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; margin-bottom: 0;">
+            <div class="card client-card kpi-card-3d" data-id="${c.id}" style="cursor: pointer; margin-bottom: 0;">
               <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
                 <span class="badge ${isCompany ? 'badge-blue' : 'badge-gray'}">
-                  ${isCompany ? '🏢 Azienda' : '👤 Persona'}
+                  ${isCompany ? icon('building', 12) : icon('user', 12)}
+                  <span>${isCompany ? 'Azienda' : 'Persona'}</span>
                 </span>
                 <div style="display: flex; gap: 4px;">
-                  <button class="btn btn-sm btn-secondary client-quick-edit-btn" data-id="${c.id}" title="Modifica">✏️</button>
+                  <button class="btn btn-sm btn-secondary client-quick-edit-btn" data-id="${c.id}" title="Modifica">${icon('edit', 13)}</button>
                 </div>
               </div>
 
-              <div style="font-weight: 700; font-size: 15px; margin-bottom: 2px;">${title}</div>
+              <div style="font-weight: 600; font-size: 15px; letter-spacing: -0.015em; margin-bottom: 2px; color: var(--text-main);">${title}</div>
               ${sub ? `<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">${sub}</div>` : ''}
 
               <div style="font-size: 12px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
-                ${c.email ? `<div>✉️ ${c.email}</div>` : ''}
-                ${c.phone ? `<div>📞 ${c.phone}</div>` : ''}
-                ${c.city ? `<div>📍 ${c.city}</div>` : ''}
+                ${c.email ? `<div>${c.email}</div>` : ''}
+                ${c.phone ? `<div class="mono">${c.phone}</div>` : ''}
+                ${c.city ? `<div>${c.city}</div>` : ''}
               </div>
 
               ${c.tags && c.tags.length > 0 ? `
@@ -120,6 +124,8 @@ export function renderClients(container, router) {
   container.querySelector('#new-client-btn')?.addEventListener('click', () => {
     openClientModal(null, container, router);
   });
+
+  attachSpringTiltCards(container);
 }
 
 /**
@@ -176,68 +182,95 @@ function renderClientProfile(container, clientId, router) {
   });
 
   container.innerHTML = `
-    <!-- Intestazione Scheda Cliente -->
-    <div class="card" style="margin-bottom: 20px;">
+    <!-- Intestazione Scheda Cliente + Striscia KPI in JetBrains Mono -->
+    <div class="card" style="margin-bottom: 16px;">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
         <div>
-          <button id="back-to-clients-btn" class="btn btn-sm btn-secondary" style="margin-bottom: 8px;">
-            ← Torna ai Clienti
+          <button id="back-to-clients-btn" class="btn btn-sm btn-secondary" style="margin-bottom: 10px;">
+            ${icon('arrowLeft', 14)}
+            <span>Clienti</span>
           </button>
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <h2 style="font-size: 22px; font-weight: 800;">${displayName}</h2>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <h2 style="font-size: 20px; font-weight: 700; letter-spacing: -0.02em;">${displayName}</h2>
             <span class="badge ${isCompany ? 'badge-blue' : 'badge-gray'}">${isCompany ? 'Azienda' : 'Privato'}</span>
+            ${client.staging_url ? `<a href="${client.staging_url}" target="_blank" rel="noopener" class="badge badge-gray" style="text-decoration:none;">Staging ↗</a>` : ''}
+            ${client.production_url ? `<a href="${client.production_url}" target="_blank" rel="noopener" class="badge badge-blue" style="text-decoration:none;">Produzione ↗</a>` : ''}
           </div>
-          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 14px; flex-wrap: wrap;">
-            ${client.contact_person ? `<span>Ref: ${client.contact_person}</span>` : ''}
-            ${client.email ? `<span>✉️ ${client.email}</span>` : ''}
-            ${client.phone ? `<span>📞 ${client.phone}</span>` : ''}
-            ${client.address ? `<span>📍 ${client.address}, ${client.postal_code || ''} ${client.city || ''}</span>` : ''}
-            ${client.vat_number ? `<span>P.IVA: ${client.vat_number}</span>` : ''}
-            ${client.fiscal_code ? `<span>C.F.: ${client.fiscal_code}</span>` : ''}
-            ${client.sdi_code ? `<span>SDI: ${client.sdi_code}</span>` : ''}
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; display: flex; gap: 14px; flex-wrap: wrap;">
+            ${client.contact_person ? `<span>Ref: <strong>${client.contact_person}</strong></span>` : ''}
+            ${client.email ? `<span>${client.email}</span>` : ''}
+            ${client.phone ? `<span class="mono">${client.phone}</span>` : ''}
+            ${client.address ? `<span>${client.address}, ${client.postal_code || ''} ${client.city || ''}</span>` : ''}
+            ${client.vat_number ? `<span class="mono">P.IVA: ${client.vat_number}</span>` : ''}
+            ${client.fiscal_code ? `<span class="mono">C.F.: ${client.fiscal_code}</span>` : ''}
+            ${client.sdi_code ? `<span class="mono">SDI: ${client.sdi_code}</span>` : ''}
           </div>
         </div>
 
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button id="client-ai-btn" class="btn btn-ai">
-            ✨ Chiedi all'IA per questo cliente
+          <button id="client-ai-btn" class="btn btn-sm btn-ai">
+            ${icon('sparkles', 14)}
+            <span>Chiedi all'IA</span>
           </button>
-          <button id="client-edit-profile-btn" class="btn btn-secondary">
-            ✏️ Modifica Dati
+          <button id="client-edit-profile-btn" class="btn btn-sm btn-secondary">
+            ${icon('edit', 14)}
+            <span>Modifica</span>
           </button>
-          <button id="client-trash-btn" class="btn btn-danger">
-            🗑️ Cestina
+          <button id="client-trash-btn" class="btn btn-sm btn-danger">
+            ${icon('trash', 14)}
+            <span>Cestina</span>
           </button>
         </div>
       </div>
 
-      <!-- Scheda Sintesi Economica Cliente -->
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border);">
-        <div style="background: #f8fafc; padding: 12px; border-radius: var(--radius); border: 1px solid var(--border);">
-          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Totale Concordato</div>
-          <div style="font-size: 18px; font-weight: 800; color: var(--text-main); margin-top: 4px;">${formatCurrency(totalAgreed)}</div>
+      <!-- Scheda Sintesi Economica Cliente (JetBrains Mono Tabular) -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
+        <div class="kpi-card-3d" style="background: #fafafa; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
+          <div style="font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">Totale Concordato</div>
+          <div class="mono" style="font-size: 18px; font-weight: 700; color: var(--text-main); margin-top: 4px;">${formatCurrency(totalAgreed)}</div>
         </div>
-        <div style="background: #f8fafc; padding: 12px; border-radius: var(--radius); border: 1px solid var(--border);">
-          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Incassato Effettivo</div>
-          <div style="font-size: 18px; font-weight: 800; color: var(--success); margin-top: 4px;">${formatCurrency(totalPaid)}</div>
+        <div class="kpi-card-3d" style="background: #fafafa; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
+          <div style="font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">Incassato Effettivo</div>
+          <div class="mono" style="font-size: 18px; font-weight: 700; color: var(--success); margin-top: 4px;">${formatCurrency(totalPaid)}</div>
         </div>
-        <div style="background: #f8fafc; padding: 12px; border-radius: var(--radius); border: 1px solid var(--border);">
-          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Residuo da Incassare</div>
-          <div style="font-size: 18px; font-weight: 800; color: ${residualClient > 0 ? 'var(--danger)' : 'var(--text-muted)'}; margin-top: 4px;">${formatCurrency(residualClient)}</div>
+        <div class="kpi-card-3d" style="background: #fafafa; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
+          <div style="font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">Residuo da Incassare</div>
+          <div class="mono" style="font-size: 18px; font-weight: 700; color: ${residualClient > 0 ? 'var(--danger)' : 'var(--text-muted)'}; margin-top: 4px;">${formatCurrency(residualClient)}</div>
         </div>
-        <div style="background: #f0fdf4; padding: 12px; border-radius: var(--radius); border: 1px solid #bbf7d0;">
-          <div style="font-size: 11px; text-transform: uppercase; color: #166534; font-weight: 600;">Canone Ricorrente (MRR)</div>
-          <div style="font-size: 18px; font-weight: 800; color: #166534; margin-top: 4px;">${formatCurrency(activeMRR)}/mese</div>
+        <div class="kpi-card-3d" style="background: #ecfdf5; padding: 12px 14px; border-radius: 8px; border: 1px solid rgba(5, 150, 105, 0.22);">
+          <div style="font-size: 10.5px; text-transform: uppercase; color: #047857; font-weight: 600; letter-spacing: 0.04em;">Canone Ricorrente (MRR)</div>
+          <div class="mono" style="font-size: 18px; font-weight: 700; color: #047857; margin-top: 4px;">${formatCurrency(activeMRR)}/mese</div>
         </div>
       </div>
     </div>
 
+    <!-- Segmented Control (Tab a Pillola per navigare senza caos) -->
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px;">
+      <div class="segmented-tabs">
+        <button type="button" class="segmented-tab-btn client-tab-btn ${activeClientTab === 'all' ? 'active' : ''}" data-client-tab="all">
+          Vista Completa
+        </button>
+        <button type="button" class="segmented-tab-btn client-tab-btn ${activeClientTab === 'todos' ? 'active' : ''}" data-client-tab="todos">
+          Attività & To-do <span class="badge badge-gray mono" style="padding:0 5px;font-size:10px;">${todos.length}</span>
+        </button>
+        <button type="button" class="segmented-tab-btn client-tab-btn ${activeClientTab === 'tech' ? 'active' : ''}" data-client-tab="tech">
+          Ambienti & GitHub
+        </button>
+        <button type="button" class="segmented-tab-btn client-tab-btn ${activeClientTab === 'billing' ? 'active' : ''}" data-client-tab="billing">
+          Preventivi & Canoni MRR <span class="badge badge-gray mono" style="padding:0 5px;font-size:10px;">${quotes.length + maintenance_contracts.length}</span>
+        </button>
+        <button type="button" class="segmented-tab-btn client-tab-btn ${activeClientTab === 'events' ? 'active' : ''}" data-client-tab="events">
+          Agenda & Rilasci <span class="badge badge-gray mono" style="padding:0 5px;font-size:10px;">${appointments.length}</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Ambienti, Git & Manutenzioni -->
-    <div class="grid-2" style="margin-bottom: 20px;">
+    <div class="grid-2" style="margin-bottom: 18px; display: ${(activeClientTab === 'all' || activeClientTab === 'tech' || activeClientTab === 'billing') ? 'grid' : 'none'};">
       <!-- Ambienti Dev & GitHub -->
-      <div class="card" style="margin-bottom: 0;">
+      <div class="card" style="margin-bottom: 0; display: ${(activeClientTab === 'all' || activeClientTab === 'tech') ? 'block' : 'none'};">
         <div class="card-header">
-          <div class="card-title">💻 Ambienti & Repository Git</div>
+          <div class="card-title">${icon('git', 15)} <span>Ambienti & Repository Git</span></div>
           <button id="edit-tech-btn" class="btn btn-sm btn-secondary">Modifica</button>
         </div>
 
@@ -285,9 +318,9 @@ function renderClientProfile(container, clientId, router) {
       </div>
 
       <!-- Canoni di Manutenzione Ricorrenti (MRR) -->
-      <div class="card" style="margin-bottom: 0;">
+      <div class="card" style="margin-bottom: 0; display: ${(activeClientTab === 'all' || activeClientTab === 'billing') ? 'block' : 'none'};">
         <div class="card-header">
-          <div class="card-title">🔄 Canoni di Manutenzione & SLA (${maintenance_contracts.length})</div>
+          <div class="card-title">Canoni di Manutenzione & SLA (<span class="mono">${maintenance_contracts.length}</span>)</div>
           <button id="add-contract-btn" class="btn btn-sm btn-primary">+ Aggiungi Canone</button>
         </div>
 
@@ -299,12 +332,12 @@ function renderClientProfile(container, clientId, router) {
         ` : `
           <div style="display: flex; flex-direction: column; gap: 8px;">
             ${maintenance_contracts.map((c, idx) => `
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius);">
                 <div>
                   <div style="font-weight: 600; font-size: 13px;">${c.title || 'Canone Manutenzione'}</div>
                   <div style="font-size: 11px; color: var(--text-muted);">
-                    ${formatCurrency(c.amount)} / ${c.frequency === 'annual' ? 'anno' : (c.frequency === 'quarterly' ? 'trimestre' : 'mese')}
-                    ${c.billing_day ? ` • Fatturazione il ${c.billing_day} del mese` : ''}
+                    <span class="mono" style="font-weight: 600; color: var(--text-main);">${formatCurrency(c.amount)}</span> / ${c.frequency === 'annual' ? 'anno' : (c.frequency === 'quarterly' ? 'trimestre' : 'mese')}
+                    ${c.billing_day ? ` • Fatturazione il <span class="mono">${c.billing_day}</span> del mese` : ''}
                   </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
@@ -321,11 +354,11 @@ function renderClientProfile(container, clientId, router) {
     </div>
 
     <!-- Griglia Operativa Cliente -->
-    <div class="grid-2">
+    <div class="${activeClientTab === 'all' ? 'grid-2' : ''}" style="display: ${activeClientTab === 'tech' ? 'none' : (activeClientTab === 'all' ? 'grid' : 'block')};">
       <!-- Colonna To-do del Cliente raggruppati per Mese -->
-      <div class="card">
+      <div class="card" style="display: ${(activeClientTab === 'all' || activeClientTab === 'todos') ? 'block' : 'none'};">
         <div class="card-header">
-          <div class="card-title">To-do & Lavori del Cliente (${todos.length})</div>
+          <div class="card-title">${icon('todos', 15)} <span>To-do & Lavori del Cliente (<span class="mono">${todos.length}</span>)</span></div>
           <button id="client-add-todo-btn" class="btn btn-sm btn-primary">+ Aggiungi To-do</button>
         </div>
 
@@ -335,18 +368,18 @@ function renderClientProfile(container, clientId, router) {
           </div>
         ` : Object.entries(groupedTodos).map(([month, group]) => `
           <div style="margin-bottom: 18px; border-bottom: 1px solid var(--border); padding-bottom: 12px;">
-            <div style="font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 8px;">📅 ${month}</div>
+            <div style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px;">${month}</div>
 
             <!-- Da fare -->
             ${group.pending.length > 0 ? `
               <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px;">
                 ${group.pending.map(t => `
-                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: #ffffff; border: 1px solid var(--border); border-radius: var(--radius);">
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 9px 11px; background: #ffffff; border: 1px solid var(--border); border-radius: var(--radius);">
                     <div style="min-width: 0;">
                       <div style="font-weight: 600; font-size: 13px;">${t.title}</div>
                       <div style="font-size: 11px; color: var(--text-muted);">
-                        ${t.due_date ? `Scadenza: ${formatDateTime(t.due_date)} • ` : ''}
-                        ${t.compensation_amount > 0 ? `Compenso: ${formatCurrency(t.compensation_amount)}` : ''}
+                        ${t.due_date ? `Scadenza: <span class="mono">${formatDateTime(t.due_date)}</span> • ` : ''}
+                        ${t.compensation_amount > 0 ? `Compenso: <span class="mono" style="font-weight:600;color:var(--text-main);">${formatCurrency(t.compensation_amount)}</span>` : ''}
                       </div>
                     </div>
                     <span class="badge ${t.priority === 'urgente' ? 'badge-red' : 'badge-gray'}">${t.priority}</span>
@@ -359,7 +392,7 @@ function renderClientProfile(container, clientId, router) {
             ${group.completed.length > 0 ? `
               <div style="display: flex; flex-direction: column; gap: 6px;">
                 ${group.completed.map(t => `
-                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); opacity: 0.75;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 11px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius); opacity: 0.75;">
                     <div style="font-weight: 500; font-size: 13px; text-decoration: line-through;">${t.title}</div>
                     <span class="badge badge-green">Fatto</span>
                   </div>
@@ -373,9 +406,9 @@ function renderClientProfile(container, clientId, router) {
       <!-- Colonna Preventivi & Appuntamenti/Shooting -->
       <div>
         <!-- Preventivi del Cliente -->
-        <div class="card" style="margin-bottom: 20px;">
+        <div class="card" style="margin-bottom: 20px; display: ${(activeClientTab === 'all' || activeClientTab === 'billing') ? 'block' : 'none'};">
           <div class="card-header">
-            <div class="card-title">Preventivi (${quotes.length})</div>
+            <div class="card-title">${icon('quotes', 15)} <span>Preventivi (<span class="mono">${quotes.length}</span>)</span></div>
             <button id="client-create-quote-btn" class="btn btn-sm btn-primary">+ Nuovo Preventivo</button>
           </div>
 
@@ -386,11 +419,11 @@ function renderClientProfile(container, clientId, router) {
           ` : `
             <div style="display: flex; flex-direction: column; gap: 8px;">
               ${quotes.map(q => `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius);">
                   <div>
-                    <div style="font-weight: 600;">N. ${q.quote_number} - ${q.title}</div>
+                    <div style="font-weight: 600;"><span class="mono">N. ${q.quote_number}</span> - ${q.title}</div>
                     <div style="font-size: 11px; color: var(--text-muted);">
-                      Data: ${formatDate(q.issue_date)} • Totale: <strong>${formatCurrency(q.agreed_total || 0)}</strong>
+                      Data: <span class="mono">${formatDate(q.issue_date)}</span> • Totale: <strong class="mono" style="color:var(--text-main);">${formatCurrency(q.agreed_total || 0)}</strong>
                     </div>
                   </div>
                   <span class="badge badge-blue">${q.status}</span>
@@ -401,9 +434,9 @@ function renderClientProfile(container, clientId, router) {
         </div>
 
         <!-- Appuntamenti, Rilasci & Scadenze -->
-        <div class="card">
+        <div class="card" style="display: ${(activeClientTab === 'all' || activeClientTab === 'events') ? 'block' : 'none'};">
           <div class="card-header">
-            <div class="card-title">Appuntamenti, Rilasci & Scadenze (${appointments.length})</div>
+            <div class="card-title">${icon('calendar', 15)} <span>Appuntamenti, Rilasci & Scadenze (<span class="mono">${appointments.length}</span>)</span></div>
           </div>
 
           ${appointments.length === 0 ? `
@@ -413,21 +446,21 @@ function renderClientProfile(container, clientId, router) {
           ` : `
             <div style="display: flex; flex-direction: column; gap: 8px;">
               ${appointments.map(a => {
-                let badgeHtml = '<span class="badge badge-gray">🗓️ Incontro</span>';
-                if (a.activity_type === 'deploy') badgeHtml = '<span class="badge badge-blue">🚀 Deploy</span>';
-                else if (a.activity_type === 'demo') badgeHtml = '<span class="badge badge-green">💻 Demo Sprint</span>';
-                else if (a.activity_type === 'call') badgeHtml = '<span class="badge badge-yellow">📞 Call Tecnica</span>';
-                else if (a.activity_type === 'server_deadline') badgeHtml = '<span class="badge badge-red">⏳ Scadenza Server</span>';
-                else if (a.is_shooting) badgeHtml = '<span class="badge badge-blue">📸 Shooting</span>';
+                let badgeHtml = '<span class="badge badge-gray">Incontro</span>';
+                if (a.activity_type === 'deploy') badgeHtml = '<span class="badge badge-blue">Deploy</span>';
+                else if (a.activity_type === 'demo') badgeHtml = '<span class="badge badge-green">Demo Sprint</span>';
+                else if (a.activity_type === 'call') badgeHtml = '<span class="badge badge-yellow">Call Tecnica</span>';
+                else if (a.activity_type === 'server_deadline') badgeHtml = '<span class="badge badge-red">Scadenza Server</span>';
+                else if (a.is_shooting) badgeHtml = '<span class="badge badge-blue">Shooting</span>';
 
                 return `
-                  <div style="padding: 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+                  <div style="padding: 10px 12px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius);">
                     <div style="display: flex; justify-content: space-between;">
                       <div style="font-weight: 600;">${a.title}</div>
                       ${badgeHtml}
                     </div>
                     <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-                      🕒 ${formatDateTime(a.start_time)} ${a.location ? `• 📍 ${a.location}` : ''}
+                      <span class="mono">${formatDateTime(a.start_time)}</span> ${a.location ? `• ${a.location}` : ''}
                     </div>
                   </div>
                 `;
@@ -440,6 +473,16 @@ function renderClientProfile(container, clientId, router) {
 
     <div id="client-modal-container"></div>
   `;
+
+  // Listener per Segmented Control (Tab)
+  container.querySelectorAll('.client-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeClientTab = btn.getAttribute('data-client-tab') || 'all';
+      renderClientProfile(container, clientId, router);
+    });
+  });
+
+  attachSpringTiltCards(container);
 
   // Caricamento asincrono GitHub Widget
   const ghWidgetContent = container.querySelector('#github-widget-content');

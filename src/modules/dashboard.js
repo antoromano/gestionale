@@ -1,12 +1,13 @@
 // src/modules/dashboard.js
-// Dashboard Operativa: Solo to-do aperti/urgenti, scadenze/appuntamenti, lavori aperti e modulo rapido
+// Dashboard Operativa: Command Bar Quick-Add (Linear/Raycast style), Bento Grid operativa e Micro-Fisica 3D
 
 import { store } from '../services/store.js';
 import { formatDate, formatDateTime, formatCurrency } from '../utils/formatters.js';
 import { openAiModal } from './ai-assistant.js';
+import { icon } from '../utils/icons.js';
+import { attachSpringTiltCards } from '../utils/three-scenes.js';
 
 export function renderDashboard(container, router) {
-  const settings = store.getSettings();
   const todos = store.getAll('todos');
   const appointments = store.getAll('appointments');
   const quotes = store.getAll('quotes');
@@ -19,7 +20,6 @@ export function renderDashboard(container, router) {
   const openTodos = todos.filter(t => !t.is_completed);
   const urgentTodos = openTodos.filter(t => t.priority === 'urgente' || t.priority === 'alta');
   const overdueTodos = openTodos.filter(t => t.due_date && t.due_date < now.toISOString());
-  const todayTodos = openTodos.filter(t => t.due_date && t.due_date.startsWith(todayStr));
 
   // 2. Scadenze e appuntamenti futuri o di oggi
   const upcomingAppointments = appointments
@@ -34,12 +34,16 @@ export function renderDashboard(container, router) {
     .slice(0, 6);
 
   container.innerHTML = `
-    <!-- Modulo Rapido Aggiunta To-do -->
+    <!-- Command Bar Rapida Aggiunta To-do (Linear / Raycast style) -->
     <div class="quick-todo-card">
-      <div style="font-weight: 700; font-size: 14px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
-        <span>Aggiungi To-do al volo</span>
+      <div style="font-weight: 600; font-size: 12.5px; color: var(--text-muted); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+        <span style="display: inline-flex; align-items: center; gap: 6px; color: var(--text-main);">
+          ${icon('todos', 15)}
+          <span>Command Bar • Aggiungi To-do al volo</span>
+        </span>
         <button id="dashboard-trigger-ai-btn" class="btn btn-sm btn-ai" title="Assistente IA">
-          ✨ Chiedi all'IA
+          ${icon('sparkles', 14)}
+          <span>Chiedi all'IA</span>
         </button>
       </div>
 
@@ -49,26 +53,29 @@ export function renderDashboard(container, router) {
             type="text"
             id="quick-todo-title"
             class="form-input"
-            placeholder="Cosa devi fare? (es. Revisionare contratto, inviare bozza...)"
+            style="flex: 2; min-width: 220px;"
+            placeholder="Cosa devi fare? (es. Revisionare contratto, deploy produzione, inviare bozza...)"
             required
             autocomplete="off"
           />
-          <select id="quick-todo-client" class="form-select" style="max-width: 200px;">
+          <select id="quick-todo-client" class="form-select" style="flex: 1; max-width: 210px; min-width: 150px;">
             <option value="">Nessun cliente</option>
             ${clients.map(c => `<option value="${c.id}">${c.company_name || `${c.first_name} ${c.last_name}`}</option>`).join('')}
           </select>
-          <button type="button" id="quick-todo-toggle-details" class="btn btn-secondary" title="Dettagli">
-            ⚙️ Dettagli
+          <button type="button" id="quick-todo-toggle-details" class="btn btn-secondary" title="Opzioni avanzate">
+            ${icon('sliders', 14)}
+            <span>Dettagli</span>
           </button>
           <button type="submit" class="btn btn-primary">
-            + Aggiungi
+            ${icon('plus', 14)}
+            <span>Aggiungi</span>
           </button>
         </div>
 
         <div id="quick-todo-details-pane" class="quick-todo-expandable" style="display: none;">
           <div>
             <label class="form-label">Scadenza</label>
-            <input type="datetime-local" id="quick-todo-due" class="form-input" />
+            <input type="datetime-local" id="quick-todo-due" class="form-input mono" />
           </div>
           <div>
             <label class="form-label">Priorità</label>
@@ -81,7 +88,7 @@ export function renderDashboard(container, router) {
           </div>
           <div>
             <label class="form-label">Compenso autonomo (€)</label>
-            <input type="number" id="quick-todo-compensation" class="form-input" placeholder="0.00" step="0.01" />
+            <input type="number" id="quick-todo-compensation" class="form-input mono" placeholder="0.00" step="0.01" />
           </div>
           <div style="grid-column: 1 / -1;">
             <label class="form-label">Note</label>
@@ -91,37 +98,41 @@ export function renderDashboard(container, router) {
       </form>
     </div>
 
-    <!-- Sezioni Operative Principali -->
+    <!-- Bento Grid Operativa Principale -->
     <div class="grid-2">
       <!-- Colonna To-do Operativi -->
-      <div class="card">
+      <div class="card kpi-card-3d">
         <div class="card-header">
-          <div class="card-title">To-do Aperti (${openTodos.length})</div>
+          <div class="card-title" style="display: flex; align-items: center; gap: 8px;">
+            ${icon('todos', 16)}
+            <span>To-do Aperti</span>
+            <span class="badge badge-gray mono">${openTodos.length}</span>
+          </div>
           <div style="display: flex; gap: 6px;">
-            ${overdueTodos.length > 0 ? `<span class="badge badge-red">${overdueTodos.length} Scaduti</span>` : ''}
-            ${urgentTodos.length > 0 ? `<span class="badge badge-yellow">${urgentTodos.length} Urgenti</span>` : ''}
+            ${overdueTodos.length > 0 ? `<span class="badge badge-red mono">${overdueTodos.length} Scaduti</span>` : ''}
+            ${urgentTodos.length > 0 ? `<span class="badge badge-yellow mono">${urgentTodos.length} Urgenti</span>` : ''}
           </div>
         </div>
 
         ${openTodos.length === 0 ? `
-          <div style="text-align: center; padding: 30px; color: var(--text-muted);">
-            Nessun to-do aperto. Ottimo lavoro!
+          <div style="text-align: center; padding: 32px 16px; color: var(--text-muted); font-size: 13px;">
+            Nessun to-do aperto. Tutto in ordine.
           </div>
         ` : `
-          <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; flex-direction: column; gap: 6px;">
             ${openTodos.slice(0, 8).map(t => {
               const client = t.client_id ? store.getById('clients', t.client_id) : null;
               const isOverdue = t.due_date && t.due_date < now.toISOString();
               return `
-                <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; background: #fafafa; border: 1px solid var(--border); border-radius: 7px; gap: 10px;">
                   <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
-                    <input type="checkbox" data-todo-id="${t.id}" class="dashboard-complete-todo" style="width: 18px; height: 18px; cursor: pointer;" />
+                    <input type="checkbox" data-todo-id="${t.id}" class="dashboard-complete-todo" style="width: 16px; height: 16px; cursor: pointer; accent-color: #09090b;" />
                     <div style="min-width: 0;">
-                      <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${t.title}</div>
-                      <div style="font-size: 11px; color: var(--text-muted); display: flex; gap: 8px; flex-wrap: wrap;">
-                        ${client ? `<span>👤 ${client.company_name || `${client.first_name} ${client.last_name}`}</span>` : ''}
-                        ${t.due_date ? `<span style="${isOverdue ? 'color: var(--danger); font-weight: 700;' : ''}">📅 ${formatDateTime(t.due_date)}</span>` : ''}
-                        ${t.compensation_amount > 0 ? `<span style="color: var(--success); font-weight: 600;">💰 ${formatCurrency(t.compensation_amount)}</span>` : ''}
+                      <div style="font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-main);">${t.title}</div>
+                      <div style="font-size: 11px; color: var(--text-muted); display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px;">
+                        ${client ? `<span>${client.company_name || `${client.first_name} ${client.last_name}`}</span>` : ''}
+                        ${t.due_date ? `<span class="mono" style="${isOverdue ? 'color: var(--danger); font-weight: 600;' : ''}">${formatDateTime(t.due_date)}</span>` : ''}
+                        ${t.compensation_amount > 0 ? `<span class="mono" style="color: var(--success); font-weight: 600;">${formatCurrency(t.compensation_amount)}</span>` : ''}
                       </div>
                     </div>
                   </div>
@@ -138,32 +149,35 @@ export function renderDashboard(container, router) {
       </div>
 
       <!-- Colonna Appuntamenti e Scadenze Imminenti -->
-      <div class="card">
+      <div class="card kpi-card-3d">
         <div class="card-header">
-          <div class="card-title">Agenda & Appuntamenti</div>
+          <div class="card-title" style="display: flex; align-items: center; gap: 8px;">
+            ${icon('calendar', 16)}
+            <span>Agenda, Deploy & Scadenze</span>
+          </div>
           <button class="btn btn-sm btn-secondary" id="go-to-calendar-btn">Vedi Agenda</button>
         </div>
 
         ${upcomingAppointments.length === 0 ? `
-          <div style="text-align: center; padding: 30px; color: var(--text-muted);">
-            Nessun appuntamento o shooting imminente.
+          <div style="text-align: center; padding: 32px 16px; color: var(--text-muted); font-size: 13px;">
+            Nessun appuntamento o rilascio imminente.
           </div>
         ` : `
-          <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; flex-direction: column; gap: 6px;">
             ${upcomingAppointments.map(a => {
               const client = a.client_id ? store.getById('clients', a.client_id) : null;
               return `
-                <div style="padding: 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
-                  <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                    <div style="font-weight: 600;">${a.title}</div>
-                    <span class="badge ${a.is_shooting ? 'badge-blue' : 'badge-gray'}">
-                      ${a.is_shooting ? `📸 ${a.shooting_type || 'Shooting'}` : 'Incontro'}
+                <div style="padding: 9px 11px; background: #fafafa; border: 1px solid var(--border); border-radius: 7px;">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+                    <div style="font-weight: 600; font-size: 13px; color: var(--text-main);">${a.title}</div>
+                    <span class="badge ${a.is_shooting || a.activity_type === 'deploy' ? 'badge-blue' : 'badge-gray'}">
+                      ${a.activity_type === 'deploy' ? 'Deploy' : (a.is_shooting ? (a.shooting_type || 'Shooting') : 'Incontro')}
                     </span>
                   </div>
                   <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap;">
-                    <span>🕒 ${formatDateTime(a.start_time)}</span>
-                    ${a.location ? `<span>📍 ${a.location}</span>` : ''}
-                    ${client ? `<span>👤 ${client.company_name || `${client.first_name} ${client.last_name}`}</span>` : ''}
+                    <span class="mono">${formatDateTime(a.start_time)}</span>
+                    ${a.location ? `<span>${a.location}</span>` : ''}
+                    ${client ? `<span style="font-weight: 500; color: var(--text-main);">${client.company_name || `${client.first_name} ${client.last_name}`}</span>` : ''}
                   </div>
                 </div>
               `;
@@ -176,12 +190,16 @@ export function renderDashboard(container, router) {
     <!-- Lavori Aperti Collegati ai Clienti -->
     <div class="card">
       <div class="card-header">
-        <div class="card-title">Lavori Aperti in Corso (${openJobs.length})</div>
+        <div class="card-title" style="display: flex; align-items: center; gap: 8px;">
+          ${icon('quotes', 16)}
+          <span>Lavori & Preventivi Attivi</span>
+          <span class="badge badge-gray mono">${openJobs.length}</span>
+        </div>
         <button class="btn btn-sm btn-secondary" id="go-to-quotes-btn">Vedi Preventivi</button>
       </div>
 
       ${openJobs.length === 0 ? `
-        <div style="text-align: center; padding: 20px; color: var(--text-muted);">
+        <div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px;">
           Nessun lavoro attualmente in lavorazione.
         </div>
       ` : `
@@ -189,18 +207,18 @@ export function renderDashboard(container, router) {
           ${openJobs.map(q => {
             const client = q.client_id ? store.getById('clients', q.client_id) : null;
             return `
-              <div style="border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; background: #ffffff;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                  <span style="font-size: 11px; font-weight: 700; color: var(--accent);">N. ${q.quote_number}</span>
+              <div style="border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: #fafafa;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <span class="mono" style="font-size: 11px; font-weight: 600; color: var(--accent);">#${q.quote_number}</span>
                   <span class="badge badge-blue">${q.work_status || 'In corso'}</span>
                 </div>
-                <div style="font-weight: 700; margin-bottom: 4px;">${q.title}</div>
-                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
-                  👤 ${client ? (client.company_name || `${client.first_name} ${client.last_name}`) : 'Cliente manuale'}
+                <div style="font-weight: 600; font-size: 13.5px; margin-bottom: 4px; color: var(--text-main);">${q.title}</div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">
+                  ${client ? (client.company_name || `${client.first_name} ${client.last_name}`) : 'Cliente manuale'}
                 </div>
                 ${q.expected_delivery ? `
                   <div style="font-size: 11px; color: var(--text-muted);">
-                    📦 Consegna prevista: <strong>${formatDate(q.expected_delivery)}</strong>
+                    Consegna prevista: <strong class="mono">${formatDate(q.expected_delivery)}</strong>
                   </div>
                 ` : ''}
               </div>
@@ -210,6 +228,8 @@ export function renderDashboard(container, router) {
       `}
     </div>
   `;
+
+  attachSpringTiltCards(container);
 
   // Event Listeners
   const toggleDetailsBtn = container.querySelector('#quick-todo-toggle-details');
@@ -255,7 +275,6 @@ export function renderDashboard(container, router) {
       notesInput.value = '';
       if (detailsPane) detailsPane.style.display = 'none';
 
-      // Aggiornamento immediato
       renderDashboard(container, router);
     });
   }

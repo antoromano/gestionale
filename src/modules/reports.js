@@ -5,6 +5,7 @@
 import { store } from '../services/store.js';
 import { formatCurrency, formatDate } from '../utils/formatters.js';
 import { calculateFinancialReport } from '../utils/calculations.js';
+import { attachSpringTiltCards } from '../utils/three-scenes.js';
 
 let reportClientId = '';
 let reportStartDate = '';
@@ -31,8 +32,8 @@ export function renderReports(container, router) {
 
   container.innerHTML = `
     <!-- Filtri di Analisi -->
-    <div class="card" style="margin-bottom: 24px;">
-      <div style="font-weight: 700; font-size: 15px; margin-bottom: 12px;">Filtri Periodo e Cliente</div>
+    <div class="card" style="margin-bottom: 20px;">
+      <div style="font-weight: 600; font-size: 14px; margin-bottom: 12px;">Filtri Periodo e Cliente</div>
       <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">
         <div class="form-group" style="flex: 1; min-width: 180px; margin-bottom: 0;">
           <label class="form-label">Cliente</label>
@@ -48,12 +49,12 @@ export function renderReports(container, router) {
 
         <div class="form-group" style="flex: 1; min-width: 160px; margin-bottom: 0;">
           <label class="form-label">Data Inizio</label>
-          <input type="date" id="report-start-date" class="form-input" value="${reportStartDate}" />
+          <input type="date" id="report-start-date" class="form-input mono" value="${reportStartDate}" />
         </div>
 
         <div class="form-group" style="flex: 1; min-width: 160px; margin-bottom: 0;">
           <label class="form-label">Data Fine</label>
-          <input type="date" id="report-end-date" class="form-input" value="${reportEndDate}" />
+          <input type="date" id="report-end-date" class="form-input mono" value="${reportEndDate}" />
         </div>
 
         <div style="display: flex; gap: 8px;">
@@ -64,21 +65,21 @@ export function renderReports(container, router) {
     </div>
 
     <!-- Scheda Ricavi Ricorrenti MRR / Canoni Manutenzione -->
-    <div class="card" style="margin-bottom: 24px; background: #f0fdf4; border: 1px solid #bbf7d0;">
+    <div class="card kpi-card-3d" style="margin-bottom: 20px; background: #ecfdf5; border: 1px solid rgba(5, 150, 105, 0.22);">
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
         <div>
-          <div style="font-size: 11px; text-transform: uppercase; color: #166534; font-weight: 700; letter-spacing: 0.5px;">
+          <div style="font-size: 11px; text-transform: uppercase; color: #047857; font-weight: 600; letter-spacing: 0.04em;">
             Canoni Ricorrenti di Manutenzione & Hosting (MRR / ARR)
           </div>
-          <div style="font-size: 24px; font-weight: 800; color: #166534; margin-top: 4px;">
-            ${formatCurrency(report.mrr || 0)} <span style="font-size: 14px; font-weight: 600;">/ mese</span>
+          <div class="mono" style="font-size: 24px; font-weight: 700; color: #047857; margin-top: 4px;">
+            ${formatCurrency(report.mrr || 0)} <span style="font-size: 13px; font-weight: 600;">/ mese</span>
           </div>
-          <div style="font-size: 12px; color: #166534; margin-top: 4px;">
-            Fatturato Ricorrente Annuo Previsto (ARR): <strong>${formatCurrency((report.mrr || 0) * 12)}</strong>
+          <div style="font-size: 12px; color: #047857; margin-top: 4px;">
+            Fatturato Ricorrente Annuo Previsto (ARR): <strong class="mono">${formatCurrency((report.mrr || 0) * 12)}</strong>
           </div>
         </div>
         <div>
-          <span class="badge badge-green" style="font-size: 13px; padding: 6px 12px;">
+          <span class="badge badge-green mono" style="font-size: 12px; padding: 6px 12px;">
             ${report.activeContractsCount || 0} canoni attivi
           </span>
         </div>
@@ -86,13 +87,13 @@ export function renderReports(container, router) {
     </div>
 
     <!-- Schede KPI Principali -->
-    <div class="grid-4" style="margin-bottom: 24px;">
+    <div class="grid-4" style="margin-bottom: 20px;">
       <!-- Valore Concordato -->
-      <div class="card" style="background: #ffffff; border-top: 4px solid var(--accent); margin-bottom: 0;">
-        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px;">
+      <div class="card kpi-card-3d" style="background: #ffffff; margin-bottom: 0;">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">
           Valore Concordato
         </div>
-        <div style="font-size: 22px; font-weight: 800; color: var(--text-main); margin-top: 6px;">
+        <div class="mono" style="font-size: 22px; font-weight: 700; color: var(--text-main); margin-top: 6px;">
           ${formatCurrency(report.agreedRevenue)}
         </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
@@ -101,11 +102,11 @@ export function renderReports(container, router) {
       </div>
 
       <!-- Incassato Effettivo -->
-      <div class="card" style="background: #ffffff; border-top: 4px solid var(--success); margin-bottom: 0;">
-        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px;">
+      <div class="card kpi-card-3d" style="background: #ffffff; margin-bottom: 0;">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">
           Incassi Effettivi
         </div>
-        <div style="font-size: 22px; font-weight: 800; color: var(--success); margin-top: 6px;">
+        <div class="mono" style="font-size: 22px; font-weight: 700; color: var(--success); margin-top: 6px;">
           ${formatCurrency(report.collectedCash)}
         </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
@@ -114,11 +115,11 @@ export function renderReports(container, router) {
       </div>
 
       <!-- Residuo da Incassare -->
-      <div class="card" style="background: #ffffff; border-top: 4px solid ${report.residualReceivables > 0 ? 'var(--danger)' : 'var(--border)'}; margin-bottom: 0;">
-        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px;">
+      <div class="card kpi-card-3d" style="background: #ffffff; margin-bottom: 0;">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">
           Crediti Residui
         </div>
-        <div style="font-size: 22px; font-weight: 800; color: ${report.residualReceivables > 0 ? 'var(--danger)' : 'var(--text-main)'}; margin-top: 6px;">
+        <div class="mono" style="font-size: 22px; font-weight: 700; color: ${report.residualReceivables > 0 ? 'var(--danger)' : 'var(--text-main)'}; margin-top: 6px;">
           ${formatCurrency(report.residualReceivables)}
         </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
@@ -127,15 +128,15 @@ export function renderReports(container, router) {
       </div>
 
       <!-- Spese Totali -->
-      <div class="card" style="background: #ffffff; border-top: 4px solid #ea580c; margin-bottom: 0;">
-        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px;">
+      <div class="card kpi-card-3d" style="background: #ffffff; margin-bottom: 0;">
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">
           Spese Totali
         </div>
-        <div style="font-size: 22px; font-weight: 800; color: #ea580c; margin-top: 6px;">
+        <div class="mono" style="font-size: 22px; font-weight: 700; color: var(--warning); margin-top: 6px;">
           ${formatCurrency(report.totalExpenses)}
         </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-          ${report.expensesCount} spese registrate
+          <span class="mono">${report.expensesCount}</span> spese registrate
         </div>
       </div>
     </div>
@@ -143,38 +144,40 @@ export function renderReports(container, router) {
     <!-- Analisi dei Margini Operativi -->
     <div class="grid-2">
       <!-- Margine su Cassa Effettiva -->
-      <div class="card">
+      <div class="card kpi-card-3d">
         <div class="card-header">
           <div class="card-title">Margine Reale di Cassa</div>
           <span class="badge ${report.estimatedCashMargin >= 0 ? 'badge-green' : 'badge-red'}">
             ${report.estimatedCashMargin >= 0 ? 'In Utile' : 'Disavanzo'}
           </span>
         </div>
-        <div style="font-size: 28px; font-weight: 800; color: ${report.estimatedCashMargin >= 0 ? 'var(--success)' : 'var(--danger)'}; margin-bottom: 8px;">
+        <div class="mono" style="font-size: 28px; font-weight: 700; color: ${report.estimatedCashMargin >= 0 ? 'var(--success)' : 'var(--danger)'}; margin-bottom: 8px;">
           ${formatCurrency(report.estimatedCashMargin)}
         </div>
         <div style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
-          Calcolato come: <strong>Incassi Effettivi (${formatCurrency(report.collectedCash)})</strong> meno <strong>Spese Totali (${formatCurrency(report.totalExpenses)})</strong>.
+          Calcolato come: <strong>Incassi Effettivi (<span class="mono">${formatCurrency(report.collectedCash)}</span>)</strong> meno <strong>Spese Totali (<span class="mono">${formatCurrency(report.totalExpenses)}</span>)</strong>.
           Rappresenta la liquidità netta generata dalla gestione.
         </div>
       </div>
 
       <!-- Margine su Valore Concordato -->
-      <div class="card">
+      <div class="card kpi-card-3d">
         <div class="card-header">
           <div class="card-title">Margine Stimato sul Pattuito</div>
           <span class="badge badge-blue">Previsionale</span>
         </div>
-        <div style="font-size: 28px; font-weight: 800; color: var(--accent); margin-bottom: 8px;">
+        <div class="mono" style="font-size: 28px; font-weight: 700; color: var(--accent); margin-bottom: 8px;">
           ${formatCurrency(report.estimatedAgreedMargin)}
         </div>
         <div style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
-          Calcolato come: <strong>Valore Concordato (${formatCurrency(report.agreedRevenue)})</strong> meno <strong>Spese Totali (${formatCurrency(report.totalExpenses)})</strong>.
+          Calcolato come: <strong>Valore Concordato (<span class="mono">${formatCurrency(report.agreedRevenue)}</span>)</strong> meno <strong>Spese Totali (<span class="mono">${formatCurrency(report.totalExpenses)}</span>)</strong>.
           Rappresenta il margine atteso al saldo completo di tutti i lavori.
         </div>
       </div>
     </div>
   `;
+
+  attachSpringTiltCards(container);
 
   // Listeners Filtri
   container.querySelector('#report-client-filter')?.addEventListener('change', (e) => {

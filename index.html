@@ -3,11 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#1e293b" />
+  <meta name="theme-color" content="#09090b" />
   <meta name="description" content="Web app gestionale per professionisti, freelance e piccole attività" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg" />
   <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <title>Gestionale</title>
   <link rel="stylesheet" href="/src/styles/main.css" />
 </head>
@@ -23,58 +26,63 @@
       </div>
 
       <nav class="nav-list">
+        <div class="nav-section-label">Operatività</div>
         <a class="nav-item active" data-route="dashboard">
-          <span>📊</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
           <span>Dashboard</span>
         </a>
-        <a class="nav-item" data-route="brain">
-          <span>🧠</span>
-          <span>Second Brain</span>
-          <span class="badge" id="nav-brain-badge" style="display: none;">0</span>
-        </a>
-        <a class="nav-item" data-route="body">
-          <span>🏋️</span>
-          <span>Body</span>
-        </a>
         <a class="nav-item" data-route="todos">
-          <span>✅</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
           <span>To-do</span>
           <span class="badge" id="nav-todos-badge" style="display: none;">0</span>
         </a>
         <a class="nav-item" data-route="clients">
-          <span>👥</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           <span>Clienti</span>
         </a>
         <a class="nav-item" data-route="calendar">
-          <span>📅</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
           <span>Calendario</span>
         </a>
         <a class="nav-item" data-route="quotes">
-          <span>📄</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
           <span>Preventivi</span>
         </a>
         <a class="nav-item" data-route="expenses">
-          <span>💳</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
           <span>Spese</span>
         </a>
         <a class="nav-item" data-route="reports">
-          <span>📈</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
           <span>Report</span>
         </a>
+
+        <div class="nav-section-label" style="margin-top: 10px;">Cognitivo & Performance</div>
+        <a class="nav-item" data-route="brain">
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04Z"/></svg>
+          <span>Second Brain</span>
+          <span class="badge" id="nav-brain-badge" style="display: none;">0</span>
+        </a>
+        <a class="nav-item" data-route="body">
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6.5 6.5 11 11"/><path d="m21 21-1-1"/><path d="m3 3 1 1"/><path d="m18 22 4-4"/><path d="m2 6 4-4"/><path d="m3 10 7-7"/><path d="m14 21 7-7"/></svg>
+          <span>Body</span>
+        </a>
+
+        <div class="nav-section-label" style="margin-top: 10px;">Sistema</div>
         <a class="nav-item" data-route="catalog">
-          <span>📦</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
           <span>Catalogo servizi</span>
         </a>
         <a class="nav-item" data-route="settings">
-          <span>⚙️</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>Impostazioni</span>
         </a>
         <a class="nav-item" data-route="help">
-          <span>📖</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           <span>Guida & FAQ</span>
         </a>
         <a class="nav-item" data-route="trash">
-          <span>🗑️</span>
+          <svg class="ui-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
           <span>Cestino</span>
           <span class="badge" id="nav-trash-badge" style="display: none;">0</span>
         </a>
@@ -82,14 +90,15 @@
 
       <div class="sidebar-footer">
         <button id="sidebar-ai-btn" class="btn btn-sm btn-ai" style="width: 100%;">
-          ✨ Assistente IA
+          <svg class="ui-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+          <span>Assistente IA</span>
         </button>
         <div style="display: flex; gap: 6px;">
-          <button id="quick-backup-export" class="btn btn-sm btn-secondary" style="flex: 1; font-size: 11px; padding: 4px;" title="Esporta Backup Dati">
-            ⬇️ Backup
+          <button id="quick-backup-export" class="btn btn-sm btn-secondary" style="flex: 1; font-size: 11px; padding: 4px; background: rgba(255,255,255,0.06); color: #cbd5e1; border-color: rgba(255,255,255,0.1);" title="Esporta Backup Dati">
+            Esporta
           </button>
-          <button id="quick-backup-import" class="btn btn-sm btn-secondary" style="flex: 1; font-size: 11px; padding: 4px;" title="Ripristina Backup">
-            ⬆️ Ripristina
+          <button id="quick-backup-import" class="btn btn-sm btn-secondary" style="flex: 1; font-size: 11px; padding: 4px; background: rgba(255,255,255,0.06); color: #cbd5e1; border-color: rgba(255,255,255,0.1);" title="Ripristina Backup">
+            Ripristina
           </button>
         </div>
       </div>
@@ -101,14 +110,15 @@
       <header class="top-bar">
         <div style="display: flex; align-items: center; gap: 12px;">
           <button id="mobile-menu-toggle" class="btn btn-sm btn-secondary" style="display: none;">
-            ☰ Menu
+            Menu
           </button>
           <h1 class="page-title" id="page-title-text">Dashboard</h1>
         </div>
 
         <div class="top-actions">
           <button id="top-ai-btn" class="btn btn-sm btn-ai">
-            ✨ Assistente IA
+            <svg class="ui-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+            <span>Assistente IA</span>
           </button>
         </div>
       </header>
@@ -119,37 +129,37 @@
       </main>
     </div>
 
-    <!-- BARRA INFERIORE NAVIGAZIONE MOBILE (Oggi, To-do, IA, Clienti, Agenda) -->
+    <!-- BARRA INFERIORE NAVIGAZIONE MOBILE (Oggi, To-do, IA, Clienti, Body, Agenda) -->
     <nav class="bottom-nav">
       <button class="bottom-nav-item active" data-route="dashboard">
-        <span style="font-size: 18px;">📊</span>
+        <svg class="ui-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
         <span>Oggi</span>
       </button>
 
       <button class="bottom-nav-item" data-route="todos">
-        <span style="font-size: 18px;">✅</span>
+        <svg class="ui-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
         <span>To-do</span>
       </button>
 
       <button class="bottom-nav-item ai-btn-center" id="bottom-nav-ai-btn">
         <div class="ai-circle">
-          <span style="font-size: 20px;">✨</span>
+          <svg class="ui-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
         </div>
         <span>IA</span>
       </button>
 
       <button class="bottom-nav-item" data-route="clients">
-        <span style="font-size: 18px;">👥</span>
+        <svg class="ui-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         <span>Clienti</span>
       </button>
 
       <button class="bottom-nav-item" data-route="body">
-        <span style="font-size: 18px;">🏋️</span>
+        <svg class="ui-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="m6.5 6.5 11 11"/><path d="m21 21-1-1"/><path d="m3 3 1 1"/><path d="m18 22 4-4"/><path d="m2 6 4-4"/><path d="m3 10 7-7"/><path d="m14 21 7-7"/></svg>
         <span>Body</span>
       </button>
 
       <button class="bottom-nav-item" data-route="calendar">
-        <span style="font-size: 18px;">📅</span>
+        <svg class="ui-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         <span>Agenda</span>
       </button>
     </nav>

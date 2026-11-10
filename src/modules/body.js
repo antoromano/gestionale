@@ -10,8 +10,11 @@ import {
 } from '../utils/body-parser.js';
 import { analyzeBodyWithSecondBrain, ingestKnowledge } from '../services/brain.js';
 import { openAiModal } from './ai-assistant.js';
+import { icon } from '../utils/icons.js';
+import { mountBodyRecoveryCore3D, attachSpringTiltCards } from '../utils/three-scenes.js';
 
 let activeSubView = 'matrix'; // 'matrix' | 'progressions'
+let activeBody3DInstance = null;
 let selectedProgressionColumnId = null;
 let selectedProgressionVariant = 'all';
 let daysWindowLimit = 14;
@@ -50,111 +53,132 @@ export function renderBody(container, router) {
   const matrixDates = buildMatrixDateRows(dailyLogs, workoutEntries, daysWindowLimit);
 
   container.innerHTML = `
-    <!-- 1. DASHBOARD BIOMETRICA SINTETICA & CONSIGLI DI OGGI (2-3 GIORNI) -->
-    <div class="grid-4" style="margin-bottom: 18px;">
+    <!-- GUIDA COLLASSABILE (PROGRESSIVE DISCLOSURE) -->
+    <details class="ux-guide-callout">
+      <summary>
+        <span>${icon('info', 14)} Come funziona la Matrice Diario Intelligente & Notazione Rapida</span>
+        <span class="badge badge-gray mono">Frequenza 2-3gg • Parole Complete</span>
+      </summary>
+      <div class="callout-body">
+        La <strong>Matrice Diario</strong> unisce la velocità del quaderno cartaceo con la chiarezza digitale:
+        digita i numeri delle serie in modo compatto (es. <code class="mono">20(10,10,10,10)</code> per 4 serie da 10 con 20 kg) e usa i chip per inserire varianti a <strong>parole complete</strong> (<em>Presa Larga</em>, <em>Anelli</em>, <em>Pseudo Planche</em>, <em>Singolo Arto</em>). Il semaforo in cima a ogni colonna e il <strong>Poliedro 3D di Recupero</strong> indicano i gruppi freschi nella finestra ottimale di <strong>2-3 giorni</strong>.
+      </div>
+    </details>
+
+    <!-- 1. DASHBOARD BIOMETRICA SINTETICA + POLIEDRO 3D DI RECUPERO MUSCOLARE -->
+    <div class="grid-4" style="margin-bottom: 16px;">
       <!-- Peso Medio 7gg -->
-      <div class="card" style="margin-bottom: 0; padding: 16px; border-left: 4px solid #2563eb;">
-        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">⚖️ Peso Medio 7gg (Media Mobile)</div>
+      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 5px;">
+          ${icon('scale', 13)} <span>Peso Medio 7gg</span>
+        </div>
         <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 4px;">
-          <div style="font-size: 24px; font-weight: 800; color: var(--text-main);">
+          <div class="mono" style="font-size: 24px; font-weight: 700; color: var(--text-main);">
             ${trends.avgWeight7d !== null ? `${trends.avgWeight7d} kg` : '—'}
           </div>
           ${trends.weightDelta7d !== 0 ? `
-            <span class="badge ${trends.weightDelta7d > 0 ? 'badge-blue' : 'badge-green'}" style="font-size: 10px;">
-              ${trends.weightDelta7d > 0 ? `+${trends.weightDelta7d}` : trends.weightDelta7d} kg vs sett. prec.
+            <span class="badge mono ${trends.weightDelta7d > 0 ? 'badge-blue' : 'badge-green'}" style="font-size: 10px;">
+              ${trends.weightDelta7d > 0 ? `+${trends.weightDelta7d}` : trends.weightDelta7d} kg
             </span>
           ` : ''}
         </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-          Smussa le oscillazioni idriche giornaliere
+          Media mobile anti-oscillazione idrica
         </div>
       </div>
 
       <!-- Media Sonno -->
-      <div class="card" style="margin-bottom: 0; padding: 16px; border-left: 4px solid #7c3aed;">
-        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">😴 Media Sonno (7gg)</div>
-        <div style="font-size: 24px; font-weight: 800; color: #7c3aed; margin-top: 4px;">
+      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 5px;">
+          ${icon('moon', 13)} <span>Media Sonno (7gg)</span>
+        </div>
+        <div class="mono" style="font-size: 24px; font-weight: 700; color: #6d28d9; margin-top: 4px;">
           ${trends.avgSleep7d !== null ? `${trends.avgSleep7d} h` : '—'}
         </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-          ${trends.avgSleep7d && trends.avgSleep7d >= 7.5 ? 'Recupero neurale ottimale' : 'Target consigliato: 7.5 - 8.0 ore'}
+          ${trends.avgSleep7d && trends.avgSleep7d >= 7.5 ? 'Recupero neurale ottimale' : 'Target consigliato: 7.5 - 8.0 h'}
         </div>
       </div>
 
       <!-- Media Kcal & Macronutrienti -->
-      <div class="card" style="margin-bottom: 0; padding: 16px; border-left: 4px solid #16a34a;">
-        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">🍽️ Media Kcal & Macro (7gg)</div>
-        <div style="font-size: 22px; font-weight: 800; color: #16a34a; margin-top: 4px;">
+      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 5px;">
+          ${icon('flame', 13)} <span>Media Kcal & Macro (7gg)</span>
+        </div>
+        <div class="mono" style="font-size: 22px; font-weight: 700; color: var(--success); margin-top: 4px;">
           ${trends.avgCalories7d !== null ? `${trends.avgCalories7d} kcal` : '—'}
         </div>
-        <div style="font-size: 11px; color: var(--text-main); font-weight: 600; margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap;">
+        <div class="mono" style="font-size: 11px; color: var(--text-main); font-weight: 600; margin-top: 3px; display: flex; gap: 5px; flex-wrap: wrap;">
           <span class="badge badge-blue" style="font-size: 10px;">P: ${trends.avgProtein7d ?? '—'}g</span>
           <span class="badge badge-yellow" style="font-size: 10px;">C: ${trends.avgCarbs7d ?? '—'}g</span>
           <span class="badge badge-gray" style="font-size: 10px;">G: ${trends.avgFat7d ?? '—'}g</span>
         </div>
       </div>
 
-      <!-- Esercizi Consigliati Oggi (Finestra 2-3gg) -->
-      <div class="card" style="margin-bottom: 0; padding: 16px; border-left: 4px solid #d97706;">
-        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">🎯 Consigliati Oggi (Target 2-3gg)</div>
-        <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px;">
-          ${recommendedTodayCols.length === 0 ? `
-            <span style="font-size: 12px; color: var(--success); font-weight: 600;">Tutti i gruppi muscolari sono in recupero attivo!</span>
-          ` : recommendedTodayCols.slice(0, 5).map(({ col, rec }) => `
-            <button
-              type="button"
-              class="badge ${rec.badgeClass} quick-train-recommended-btn"
-              data-col="${col.id}"
-              style="border: none; cursor: pointer; font-size: 10px; padding: 3px 7px;"
-              title="${rec.label} — Clicca per registrare sessione oggi"
-            >
-              ${col.name} (${rec.daysSinceLast !== null ? `${rec.daysSinceLast}gg` : 'Nuovo'})
-            </button>
-          `).join('')}
+      <!-- Poliedro 3D di Recupero & Esercizi Consigliati Oggi (Finestra 2-3gg) -->
+      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
+        <div id="body-recovery-3d-canvas" title="Poliedro 3D di Recupero Muscolare (Three.js) — Clicca su un satellite per registrare" style="width: 112px; height: 92px; border-radius: 8px; background: #09090b; flex-shrink: 0; overflow: hidden; border: 1px solid #27272a;"></div>
+        <div style="min-width: 0; flex: 1;">
+          <div style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
+            ${icon('target', 12)} <span>Target 2-3gg Oggi</span>
+          </div>
+          <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px;">
+            ${recommendedTodayCols.length === 0 ? `
+              <span style="font-size: 11.5px; color: var(--success); font-weight: 600;">Tutti i gruppi in recupero attivo</span>
+            ` : recommendedTodayCols.slice(0, 4).map(({ col, rec }) => `
+              <button
+                type="button"
+                class="badge ${rec.badgeClass} quick-train-recommended-btn"
+                data-col="${col.id}"
+                style="border: none; cursor: pointer; font-size: 10px; padding: 2px 7px;"
+                title="${rec.label} — Clicca per registrare sessione oggi"
+              >
+                ${col.name} (<span class="mono">${rec.daysSinceLast !== null ? `${rec.daysSinceLast}gg` : 'Nuovo'}</span>)
+              </button>
+            `).join('')}
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- 2. BARRA COMANDI & SELETTORE VISTA (MATRICE DIARIO vs PROGRESSIONI ESERCIZIO) -->
-    <div class="card" style="padding: 14px 18px; margin-bottom: 18px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button
-            type="button"
-            class="btn ${activeSubView === 'matrix' ? 'btn-primary' : 'btn-secondary'} body-view-switch-btn"
-            data-view="matrix"
-          >
-            📓 Matrice Diario Intelligente
-          </button>
-          <button
-            type="button"
-            class="btn ${activeSubView === 'progressions' ? 'btn-primary' : 'btn-secondary'} body-view-switch-btn"
-            data-view="progressions"
-          >
-            📈 Progressioni & Record per Esercizio
-          </button>
-        </div>
-
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button type="button" id="body-log-today-btn" class="btn btn-primary">
-            + Registra Oggi (Biometria & Workout)
-          </button>
-          <button type="button" id="body-brain-analyze-btn" class="btn btn-ai">
-            🧠 Analizza Andamento con il Second Brain
-          </button>
-          <button type="button" id="body-manage-cols-btn" class="btn btn-secondary">
-            ⚙️ Colonne & Varianti
-          </button>
-          ${dailyLogs.length === 0 && workoutEntries.length === 0 ? `
-            <button type="button" id="body-seed-demo-btn" class="btn btn-secondary" title="Carica 6 giorni di esempio fedeli al tuo quaderno cartaceo">
-              📓 Carica Esempio Diario
-            </button>
-          ` : ''}
-        </div>
+    <!-- 2. BARRA COMANDI & SEGMENTED CONTROL (MATRICE DIARIO vs PROGRESSIONI ESERCIZIO) -->
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+      <div class="segmented-tabs">
+        <button
+          type="button"
+          class="segmented-tab-btn body-view-switch-btn ${activeSubView === 'matrix' ? 'active' : ''}"
+          data-view="matrix"
+        >
+          ${icon('body', 14)} <span>Matrice Diario Intelligente</span>
+        </button>
+        <button
+          type="button"
+          class="segmented-tab-btn body-view-switch-btn ${activeSubView === 'progressions' ? 'active' : ''}"
+          data-view="progressions"
+        >
+          ${icon('reports', 14)} <span>Progressioni & Record per Esercizio</span>
+        </button>
       </div>
 
-      ${brainInsightReport ? renderBrainInsightBox(brainInsightReport) : ''}
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button type="button" id="body-log-today-btn" class="btn btn-sm btn-primary">
+          + Registra Oggi (Biometria & Workout)
+        </button>
+        <button type="button" id="body-brain-analyze-btn" class="btn btn-sm btn-ai">
+          ${icon('sparkles', 14)} <span>Analizza con il Second Brain</span>
+        </button>
+        <button type="button" id="body-manage-cols-btn" class="btn btn-sm btn-secondary">
+          ${icon('sliders', 14)} <span>Colonne & Varianti</span>
+        </button>
+        ${dailyLogs.length === 0 && workoutEntries.length === 0 ? `
+          <button type="button" id="body-seed-demo-btn" class="btn btn-sm btn-secondary" title="Carica 6 giorni di esempio fedeli al tuo quaderno cartaceo">
+            Carica Esempio Diario
+          </button>
+        ` : ''}
+      </div>
     </div>
+
+    ${brainInsightReport ? `<div style="margin-bottom: 16px;">${renderBrainInsightBox(brainInsightReport)}</div>` : ''}
 
     <!-- 3. CONTENUTO PRINCIPALE: MATRICE DIARIO OPPURE PROGRESSIONI -->
     <div id="body-main-view-container">
@@ -233,38 +257,38 @@ function renderMatrixDiaryView(matrixDates, columns, dailyLogs, workoutEntries, 
         </div>
       </div>
 
-      <div style="overflow-x: auto;">
+      <div style="overflow: auto; max-height: 70vh;">
         <table class="data-table" style="min-width: 1180px; border-collapse: separate; border-spacing: 0;">
           <thead>
             <tr>
-              <th style="position: sticky; left: 0; z-index: 10; background: #f1f5f9; min-width: 115px; border-right: 1px solid var(--border);">
+              <th style="position: sticky; top: 0; left: 0; z-index: 20; background: #f4f4f5; min-width: 115px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);">
                 DATA
               </th>
-              <th style="background: #f8fafc; min-width: 78px; text-align: center; border-right: 1px solid var(--border);">
-                😴 SONNO
+              <th style="position: sticky; top: 0; z-index: 15; background: #fafafa; min-width: 78px; text-align: center; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+                SONNO
               </th>
-              <th style="background: #f8fafc; min-width: 155px; border-right: 1px solid var(--border);">
-                🍽️ KCAL & MACRO
+              <th style="position: sticky; top: 0; z-index: 15; background: #fafafa; min-width: 155px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+                KCAL & MACRO
               </th>
-              <th style="background: #f8fafc; min-width: 95px; text-align: center; border-right: 2px solid #cbd5e1;">
-                ⚖️ PESO
+              <th style="position: sticky; top: 0; z-index: 15; background: #fafafa; min-width: 95px; text-align: center; border-right: 2px solid #d4d4d8; border-bottom: 1px solid var(--border);">
+                PESO
               </th>
               ${columns.map(col => {
                 const rec = recoveryByCol[col.id];
                 return `
-                  <th style="min-width: 145px; vertical-align: top; border-right: 1px solid var(--border); background: #ffffff;">
+                  <th style="position: sticky; top: 0; z-index: 15; min-width: 148px; vertical-align: top; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: #ffffff;">
                     <div style="display: flex; flex-direction: column; gap: 4px;">
                       <div
                         class="matrix-col-header-link"
                         data-col="${col.id}"
-                        style="font-weight: 800; font-size: 12px; color: var(--text-main); cursor: pointer; display: flex; align-items: center; justify-content: space-between;"
+                        style="font-weight: 700; font-size: 12px; color: var(--text-main); cursor: pointer; display: flex; align-items: center; justify-content: space-between; text-transform: none; letter-spacing: -0.01em;"
                         title="Clicca per aprire lo storico e le progressioni di ${col.name}"
                       >
                         <span>${col.name}</span>
-                        <span style="font-size: 10px; color: var(--accent);">📈</span>
+                        <span style="color: var(--accent); opacity: 0.8;">↗</span>
                       </div>
                       <div>
-                        <span class="badge ${rec.badgeClass}" style="font-size: 10px; font-weight: 700; text-transform: none;">
+                        <span class="badge ${rec.badgeClass}" style="font-size: 9.5px; font-weight: 600; text-transform: none;">
                           ${rec.shortBadge}
                         </span>
                       </div>
@@ -282,12 +306,12 @@ function renderMatrixDiaryView(matrixDates, columns, dailyLogs, workoutEntries, 
               const movAvg = movingAvgByDate.get(dateStr);
 
               return `
-                <tr style="background: ${isToday ? '#eff6ff' : (isRest ? '#f8fafc' : '#ffffff')};">
-                  <!-- Colonna DATA -->
+                <tr style="background: ${isToday ? '#f5f3ff' : (isRest ? '#fafafa' : '#ffffff')};">
+                  <!-- Colonna DATA (Sticky Left) -->
                   <td
-                    class="matrix-bio-cell"
+                    class="matrix-bio-cell mono"
                     data-date="${dateStr}"
-                    style="position: sticky; left: 0; z-index: 5; background: ${isToday ? '#dbeafe' : '#f8fafc'}; font-weight: 700; font-size: 12px; cursor: pointer; border-right: 1px solid var(--border); white-space: nowrap;"
+                    style="position: sticky; left: 0; z-index: 10; background: ${isToday ? '#ede9fe' : '#fafafa'}; font-weight: 600; font-size: 12px; cursor: pointer; border-right: 1px solid var(--border); white-space: nowrap;"
                     title="Clicca per modificare Biometria, Sonno e Kcal del ${dateStr}"
                   >
                     <div>${formatShortItalianDate(dateStr)}</div>
@@ -297,43 +321,43 @@ function renderMatrixDiaryView(matrixDates, columns, dailyLogs, workoutEntries, 
 
                   <!-- Colonna SONNO -->
                   <td
-                    class="matrix-bio-cell"
+                    class="matrix-bio-cell mono"
                     data-date="${dateStr}"
                     style="text-align: center; cursor: pointer; border-right: 1px solid var(--border); font-size: 12px;"
                   >
                     ${log?.sleep_hours ? `
-                      <span style="font-weight: 700; color: ${Number(log.sleep_hours) >= 7.5 ? '#166534' : 'var(--text-main)'};">
-                        ${log.sleep_hours} h
+                      <span style="font-weight: 600; color: ${Number(log.sleep_hours) >= 7.5 ? 'var(--success)' : 'var(--text-main)'};">
+                        ${log.sleep_hours}h
                       </span>
-                    ` : `<span style="color: #cbd5e1;">—</span>`}
+                    ` : `<span style="color: #d4d4d8;">—</span>`}
                   </td>
 
                   <!-- Colonna NUTRIZIONE (KCAL & MACRO) -->
                   <td
-                    class="matrix-bio-cell"
+                    class="matrix-bio-cell mono"
                     data-date="${dateStr}"
                     style="cursor: pointer; border-right: 1px solid var(--border); font-size: 12px;"
                   >
                     ${log?.calories_kcal || log?.protein_g ? `
-                      <div style="font-weight: 700; color: var(--text-main);">${log.calories_kcal ? `${log.calories_kcal} kcal` : ''}</div>
+                      <div style="font-weight: 600; color: var(--text-main);">${log.calories_kcal ? `${log.calories_kcal} kcal` : ''}</div>
                       ${(log.protein_g || log.carbs_g || log.fat_g) ? `
                         <div style="font-size: 10px; color: var(--text-muted); margin-top: 1px;">
                           P:${log.protein_g || 0}g • C:${log.carbs_g || 0}g • G:${log.fat_g || 0}g
                         </div>
                       ` : ''}
-                    ` : `<span style="color: #cbd5e1; font-size: 11px;">+ Kcal/Macro</span>`}
+                    ` : `<span style="color: #d4d4d8; font-size: 11px;">+ Kcal</span>`}
                   </td>
 
                   <!-- Colonna PESO -->
                   <td
-                    class="matrix-bio-cell"
+                    class="matrix-bio-cell mono"
                     data-date="${dateStr}"
-                    style="text-align: center; cursor: pointer; border-right: 2px solid #cbd5e1; font-size: 12px;"
+                    style="text-align: center; cursor: pointer; border-right: 2px solid #d4d4d8; font-size: 12px;"
                   >
                     ${log?.body_weight_kg ? `
-                      <div style="font-weight: 800; color: var(--accent);">${Number(log.body_weight_kg).toFixed(1)} kg</div>
-                      ${movAvg ? `<div style="font-size: 9px; color: var(--text-muted);">avg7: ${movAvg}</div>` : ''}
-                    ` : `<span style="color: #cbd5e1;">—</span>`}
+                      <div style="font-weight: 700; color: var(--text-main);">${Number(log.body_weight_kg).toFixed(1)} kg</div>
+                      ${movAvg ? `<div style="font-size: 9.5px; color: var(--text-muted);">avg7: ${movAvg}</div>` : ''}
+                    ` : `<span style="color: #d4d4d8;">—</span>`}
                   </td>
 
                   <!-- Celle Esercizi della Matrice -->
@@ -404,14 +428,14 @@ function renderMatrixWorkoutCell(dateStr, col, entry) {
                 ` : ''}
                 ${b.unilateral ? `
                   <span class="badge" style="background: #fef3c7; color: #b45309; font-size: 9px; padding: 1px 6px;">
-                    🦿 Singolo Arto
+                    Singolo Arto
                   </span>
                 ` : ''}
               </div>
 
-              <!-- Carico e Serie -->
-              <div style="font-size: 12px; font-family: monospace; color: var(--text-main);">
-                ${b.load_kg > 0 ? `<strong style="color: #166534; font-size: 13px;">${b.load_kg}kg</strong>` : ''}
+              <!-- Carico e Serie (JetBrains Mono Tabular) -->
+              <div class="mono" style="font-size: 12px; color: var(--text-main);">
+                ${b.load_kg > 0 ? `<strong style="color: var(--success); font-size: 12.5px;">${b.load_kg}kg</strong>` : ''}
                 <span>(${(b.sets || []).join(',')})</span>
               </div>
             </div>
@@ -420,9 +444,9 @@ function renderMatrixWorkoutCell(dateStr, col, entry) {
 
         <!-- Metadati extra (RPE, Recupero, Note) -->
         ${(entry.rpe || entry.rest_seconds || entry.detailed_notes || entry.feeling === 'dolore_fastidio') ? `
-          <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; font-size: 10px; color: var(--text-muted);">
+          <div class="mono" style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; font-size: 10px; color: var(--text-muted);">
             ${entry.rpe ? `<span class="badge badge-gray" style="font-size: 9px; padding: 1px 4px;">RPE ${entry.rpe}</span>` : ''}
-            ${entry.rest_seconds ? `<span>⏱️${entry.rest_seconds}s</span>` : ''}
+            ${entry.rest_seconds ? `<span>${entry.rest_seconds}s</span>` : ''}
             ${feelingMeta && entry.feeling !== 'buono' ? `<span title="${feelingMeta.label}">${feelingMeta.icon}</span>` : ''}
             ${entry.detailed_notes ? `<span title="${entry.detailed_notes}">📝</span>` : ''}
           </div>
@@ -1001,6 +1025,35 @@ function openManageColumnsModal(parentContainer, router) {
 }
 
 function bindBodyEvents(container, router, columns) {
+  attachSpringTiltCards(container);
+
+  // Monta il Poliedro 3D di Recupero Muscolare (Three.js)
+  if (activeBody3DInstance?.destroy) {
+    activeBody3DInstance.destroy();
+    activeBody3DInstance = null;
+  }
+  const recovery3DCanvas = container.querySelector('#body-recovery-3d-canvas');
+  if (recovery3DCanvas) {
+    const workoutEntries = store.getAll('body_workout_entries');
+    const recoveryByCol = {};
+    for (const col of columns) {
+      recoveryByCol[col.id] = calculateColumnRecoveryStatus(col.id, workoutEntries, col.target_frequency_days || 3);
+    }
+    activeBody3DInstance = mountBodyRecoveryCore3D(recovery3DCanvas, {
+      columns,
+      recoveryByCol,
+      onSelectColumn: (colId) => {
+        const col = columns.find(c => c.id === colId);
+        if (!col) return;
+        const todayIso = new Date().toISOString().split('T')[0];
+        const existing = store.getAll('body_workout_entries').find(
+          e => e.date === todayIso && e.column_id === colId
+        );
+        openWorkoutCellModal(todayIso, col, existing, container, router);
+      },
+    });
+  }
+
   // Switch vista Matrice / Progressioni
   container.querySelectorAll('.body-view-switch-btn').forEach(btn => {
     btn.addEventListener('click', () => {

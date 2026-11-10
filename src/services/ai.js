@@ -3,15 +3,29 @@
 
 import { store } from './store.js';
 import { getSupabase } from './supabase.js';
+import { querySecondBrain } from './brain.js';
 
-export async function processAiPrompt({ prompt, imageBase64, imageMimeType, audioBase64, audioMimeType, preselectedClientId = null }) {
+export async function processAiPrompt({
+  prompt,
+  imageBase64,
+  imageMimeType,
+  audioBase64,
+  audioMimeType,
+  preselectedClientId = null,
+  existingClients: passedClients = null,
+}) {
   const settings = store.getSettings();
   const allClients = store.getAll('clients');
 
-  const existingClients = allClients.map(c => ({
-    id: c.id,
-    name: c.company_name || `${c.first_name} ${c.last_name}`.trim(),
-  }));
+  const existingClients = Array.isArray(passedClients) && passedClients.length > 0
+    ? passedClients
+    : allClients.map(c => ({
+        id: c.id,
+        name: c.company_name || `${c.first_name} ${c.last_name}`.trim(),
+      }));
+
+  // Recupera il contesto cognitivo ibrido dal Second Brain (Livello 1 + 2 + 3)
+  const brainContext = await querySecondBrain(prompt || '');
 
   const payload = {
     prompt,
@@ -20,6 +34,7 @@ export async function processAiPrompt({ prompt, imageBase64, imageMimeType, audi
     audioBase64,
     audioMimeType,
     existingClients,
+    secondBrainContext: brainContext.synthesizedContext,
     currentDateIso: new Date().toISOString(),
     timezone: settings.timezone || 'Europe/Rome',
     preselectedClientId,
@@ -34,7 +49,10 @@ export async function processAiPrompt({ prompt, imageBase64, imageMimeType, audi
         body: payload,
       });
       if (!error && data && (data.todos || data.appointments)) {
-        return normalizeAiResponse(data, existingClients, preselectedClientId);
+        return {
+          ...normalizeAiResponse(data, existingClients, preselectedClientId),
+          brainContext,
+        };
       }
     } catch (err) {
       console.warn('Edge function fallita o non raggiungibile:', err);
@@ -44,7 +62,8 @@ export async function processAiPrompt({ prompt, imageBase64, imageMimeType, audi
   // 2. Prova con chiamata diretta a Gemini se l'utente ha inserito la chiave nelle Impostazioni
   if (settings.gemini_api_key) {
     try {
-      return await callDirectGemini(settings.gemini_api_key, payload, existingClients, preselectedClientId);
+      const res = await callDirectGemini(settings.gemini_api_key, payload, existingClients, preselectedClientId);
+      return { ...res, brainContext };
     } catch (err) {
       console.warn('Chiamata diretta Gemini fallita:', err);
     }
@@ -52,7 +71,8 @@ export async function processAiPrompt({ prompt, imageBase64, imageMimeType, audi
 
   // 3. Fallback Euristico Locale (Smart Parser da client)
   // Consente di testare e utilizzare immediatamente l'applicazione anche offline o prima di inserire le credenziali API
-  return localHeuristicParser(prompt, existingClients, preselectedClientId);
+  const localRes = localHeuristicParser(prompt, existingClients, preselectedClientId);
+  return { ...localRes, brainContext };
 }
 
 async function callDirectGemini(apiKey, payload, existingClients, preselectedClientId) {
@@ -71,6 +91,9 @@ Data odierna: ${payload.currentDateIso}
 Fuso orario: ${payload.timezone}
 Clienti già esistenti:
 ${clientsListStr}
+
+Contesto Second Brain (Fatti Mem0, Memorie Semantiche e Knowledge Graph):
+${payload.secondBrainContext || 'Nessun contesto preliminare'}
 
 SCHEMA JSON DA RESTITUIRE OBBLIGATORIAMENTE (e nient'altro):
 {

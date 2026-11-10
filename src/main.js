@@ -3,6 +3,7 @@
 
 import { store } from './services/store.js';
 import { renderDashboard } from './modules/dashboard.js';
+import { renderBrain } from './modules/brain.js';
 import { renderTodos } from './modules/todos.js';
 import { renderClients } from './modules/clients.js';
 import { renderCalendar } from './modules/calendar.js';
@@ -31,6 +32,7 @@ class Router {
 
     this.routes = {
       dashboard: { title: 'Dashboard Operativa', render: renderDashboard },
+      brain: { title: 'Second Brain • Architettura Cognitiva Tri-Layer', render: renderBrain },
       todos: { title: 'To-do', render: renderTodos },
       clients: { title: 'Clienti', render: renderClients },
       calendar: { title: 'Calendario & Agenda', render: renderCalendar },
@@ -164,6 +166,18 @@ class Router {
         trashBadge.style.display = 'inline-block';
       } else {
         trashBadge.style.display = 'none';
+      }
+    }
+
+    // Badge Second Brain (Fatti attivi)
+    const activeFactsCount = store.getActiveFacts().length;
+    const brainBadge = document.getElementById('nav-brain-badge');
+    if (brainBadge) {
+      if (activeFactsCount > 0) {
+        brainBadge.textContent = activeFactsCount;
+        brainBadge.style.display = 'inline-block';
+      } else {
+        brainBadge.style.display = 'none';
       }
     }
   }

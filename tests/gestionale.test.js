@@ -16,6 +16,12 @@ import {
 import { buildQuotePdfFileName } from '../src/services/pdf.js';
 import { store } from '../src/services/store.js';
 import { processAiPrompt } from '../src/services/ai.js';
+import {
+  ingestKnowledge,
+  upsertFact,
+  upsertGraphRelationship,
+  querySecondBrain,
+} from '../src/services/brain.js';
 
 describe('1. Calcoli Economici Voci di Preventivo', () => {
   it('calcola correttamente il netto di una voce con quantità, prezzo e sconto', () => {
@@ -287,5 +293,166 @@ describe('8. Workflow Software Engineer: Ambienti, MRR & Onboarding IA', () => {
     const deployAppt = result.appointments.find(a => a.activity_type === 'deploy' || a.title.toLowerCase().includes('deploy'));
     expect(deployAppt).toBeDefined();
     expect(deployAppt.activity_type).toBe('deploy');
+  });
+});
+
+describe('9. Second Brain: Architettura Cognitiva Tri-Layer Ibrida', () => {
+  beforeEach(() => {
+    store.clearAll();
+  });
+
+  it('1. esegue l\'ingestione nel Second Brain salvando memoria 768-dim, fatti atomici e grafo', async () => {
+    const res = await ingestKnowledge({
+      title: 'Architettura Cliente TechCorp',
+      text: 'Il cliente TechCorp usa Next.js e Supabase con PostgreSQL. Canone MRR: 350€/mese. Massimale pull-up: 14 ripetizioni.',
+      domain: 'client',
+      tags: ['saas', 'architettura'],
+    });
+
+    expect(res.memory).toBeDefined();
+    expect(res.memory.domain).toBe('client');
+    expect(Array.isArray(res.memory.embedding)).toBe(true);
+    expect(res.memory.embedding.length).toBe(768);
+
+    // Verifica fatti estratti nel Livello 2
+    expect(res.facts.length).toBeGreaterThanOrEqual(2);
+    const activeFacts = store.getActiveFacts();
+    expect(activeFacts.some(f => f.fact_key === 'stack_principale' && f.fact_value.includes('Next.js'))).toBe(true);
+    expect(activeFacts.some(f => f.fact_key === 'canone_mrr' && f.fact_value.includes('350'))).toBe(true);
+
+    // Verifica nodi e archi estratti nel Livello 3
+    const { nodes, edges } = store.getBrainGraph();
+    expect(nodes.some(n => n.label === 'Next.js' && n.node_type === 'technology')).toBe(true);
+    expect(nodes.some(n => n.label === 'Supabase' && n.node_type === 'technology')).toBe(true);
+    expect(edges.some(e => e.relation_type === 'USA_TECNOLOGIA')).toBe(true);
+  });
+
+  it('2. gestisce l\'upsert dei fatti stile Mem0 con storicizzazione automatica (is_active = false sul vecchio)', () => {
+    // Creazione stato iniziale (v1)
+    const first = upsertFact({
+      subject: 'TechCorp',
+      fact_key: 'canone_mrr',
+      fact_value: '300€/mese',
+      category: 'client_info',
+    });
+
+    expect(first).toBeDefined();
+    expect(first.is_active).toBe(true);
+    expect(first.action).toBe('created');
+
+    // Aggiornamento con stesso valore -> non duplica
+    const same = upsertFact({
+      subject: 'techcorp',
+      fact_key: 'canone_mrr',
+      fact_value: '300€/mese',
+      category: 'client_info',
+    });
+    expect(same.id).toBe(first.id);
+    expect(same.action).toBe('unchanged');
+
+    // Evoluzione dello stato con nuovo valore (v2) -> storicizza il vecchio record
+    const updated = upsertFact({
+      subject: 'TechCorp',
+      fact_key: 'canone_mrr',
+      fact_value: '500€/mese',
+      category: 'client_info',
+    });
+
+    expect(updated.id).not.toBe(first.id);
+    expect(updated.is_active).toBe(true);
+    expect(updated.fact_value).toBe('500€/mese');
+    expect(updated.action).toBe('superseded');
+
+    // Il vecchio fatto deve avere is_active = false, valid_to valorizzato e superseded_by = updated.id
+    const oldRecord = store.getById('brain_facts', first.id);
+    expect(oldRecord.is_active).toBe(false);
+    expect(oldRecord.valid_to).toBeTruthy();
+    expect(oldRecord.superseded_by).toBe(updated.id);
+
+    // Lo storico per (TechCorp, canone_mrr) contiene 2 versioni, ma solo 1 è attiva
+    const history = store.getFactHistory('TechCorp', 'canone_mrr');
+    expect(history.length).toBe(2);
+    const activeForTechCorp = store.getActiveFacts('TechCorp');
+    expect(activeForTechCorp.length).toBe(1);
+    expect(activeForTechCorp[0].fact_value).toBe('500€/mese');
+  });
+
+  it('3. crea nodi/archi nel Knowledge Graph e risponde tramite interrogazione ibrida a 2 Hop (querySecondBrain)', async () => {
+    await ingestKnowledge({
+      title: 'Note Stack e Sicurezza',
+      text: 'TechCorp usa Supabase per il database cloud. Target kcal: 2450 kcal.',
+      domain: 'tech',
+    });
+
+    // Creiamo una catena a 2 Hop: [TechCorp] ──(USA_TECNOLOGIA)──> [Supabase] ──(DIPENDE_DA)──> [Row Level Security]
+    upsertGraphRelationship({
+      source: 'TechCorp',
+      source_type: 'client',
+      target: 'Supabase',
+      target_type: 'technology',
+      relation_type: 'USA_TECNOLOGIA',
+      evidence: 'Stack principale',
+    });
+
+    const rel2 = upsertGraphRelationship({
+      source: 'Supabase',
+      source_type: 'technology',
+      target: 'Row Level Security',
+      target_type: 'concept',
+      relation_type: 'DIPENDE_DA',
+      evidence: 'Best practice sicurezza Postgres',
+    });
+
+    expect(rel2.edge.weight).toBe(1);
+
+    // Ripetendo la relazione il peso viene incrementato
+    const rel2Repeat = upsertGraphRelationship({
+      source: 'Supabase',
+      target: 'Row Level Security',
+      relation_type: 'DIPENDE_DA',
+    });
+    expect(rel2Repeat.edge.weight).toBe(2);
+
+    // Interrogazione ibrida su "TechCorp": deve recuperare memorie, fatti attivi e relazioni fino a 2 Hop (inclusa Row Level Security!)
+    const queryResult = await querySecondBrain('TechCorp');
+    expect(queryResult.relevantMemories.length).toBeGreaterThan(0);
+    expect(queryResult.activeFacts.length).toBeGreaterThan(0);
+    expect(queryResult.graphConnections.length).toBeGreaterThanOrEqual(2);
+
+    const hasHop1 = queryResult.graphConnections.some(c => c.target_label === 'Supabase' && c.hop === 1);
+    const hasHop2 = queryResult.graphConnections.some(c => c.target_label === 'Row Level Security' && c.hop === 2);
+    expect(hasHop1).toBe(true);
+    expect(hasHop2).toBe(true);
+    expect(queryResult.synthesizedContext).toContain('Row Level Security');
+  });
+
+  it('4. sincronizza automaticamente i clienti creati/aggiornati nel Gestionale con Fatti Mem0 e Nodi del Grafo', () => {
+    const client = store.create('clients', {
+      type: 'company',
+      company_name: 'AlfaCloud Srl',
+      stack: 'React, Node.js, PostgreSQL',
+      github_repo: 'antoromano/alfacloud',
+      maintenance_contracts: [
+        { title: 'SLA Mensile', amount: 400, frequency: 'monthly', status: 'active' },
+      ],
+    });
+
+    const factsV1 = store.getActiveFacts('AlfaCloud Srl');
+    expect(factsV1.some(f => f.fact_key === 'canone_mrr' && f.fact_value === '400€/mese')).toBe(true);
+    expect(factsV1.some(f => f.fact_key === 'stack_principale' && f.fact_value.includes('React'))).toBe(true);
+
+    // Aggiornamento del canone del cliente -> storicizza automaticamente il vecchio MRR nel Second Brain
+    store.update('clients', client.id, {
+      maintenance_contracts: [
+        { title: 'SLA Enterprise', amount: 650, frequency: 'monthly', status: 'active' },
+      ],
+    });
+
+    const factsV2 = store.getActiveFacts('AlfaCloud Srl');
+    const activeMrr = factsV2.find(f => f.fact_key === 'canone_mrr');
+    expect(activeMrr.fact_value).toBe('650€/mese');
+
+    const mrrHistory = store.getFactHistory('AlfaCloud Srl', 'canone_mrr');
+    expect(mrrHistory.length).toBe(2);
   });
 });

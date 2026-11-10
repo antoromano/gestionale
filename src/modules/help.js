@@ -16,6 +16,42 @@ export function renderHelp(container, router) {
         </p>
       </div>
 
+      <!-- Scheda Architettura Cognitiva Second Brain Tri-Layer -->
+      <div class="card" style="margin-bottom: 20px; border-left: 4px solid #7c3aed; background: linear-gradient(180deg, #faf5ff 0%, #ffffff 100%);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+          <h3 style="font-size: 16px; font-weight: 800; color: #5b21b6; margin: 0;">
+            🧠 Come Funziona il Second Brain (Architettura Cognitiva Tri-Layer Ibrida)
+          </h3>
+          <span class="badge" style="background: #ede9fe; color: #5b21b6;">GraphRAG + Mem0 + pgvector</span>
+        </div>
+        <p style="font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 12px;">
+          A differenza di un semplice blocco note, il tuo <strong>Second Brain</strong> organizza automaticamente ogni informazione (tecnica, clienti, salute/allenamento, regole) su <strong>3 livelli cognitivi sincronizzati</strong> dentro PostgreSQL:
+        </p>
+        <div class="grid-3" style="margin-bottom: 12px;">
+          <div style="background: #ffffff; padding: 12px; border-radius: var(--radius); border: 1px solid #e9d5ff;">
+            <div style="font-weight: 700; font-size: 13px; color: #1e40af; margin-bottom: 4px;">1️⃣ Livello Semantico (pgvector)</div>
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+              Archivia i tuoi appunti con <strong>embedding vettoriali a 768 dimensioni</strong> e tag GIN per ritrovare concetti per significato anche quando non ricordi le parole esatte.
+            </div>
+          </div>
+          <div style="background: #ffffff; padding: 12px; border-radius: var(--radius); border: 1px solid #bbf7d0;">
+            <div style="font-weight: 700; font-size: 13px; color: #166534; margin-bottom: 4px;">2️⃣ Livello Episodico & Fatti (Mem0)</div>
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+              Estrae coppie <code>(Soggetto, Chiave, Valore)</code>. Se un parametro cambia (es. canone MRR da 300€ a 450€, o massimale pull-up da 12 a 16), <strong>storicizza il vecchio stato</strong> (<code>is_active = false</code>) e attiva il nuovo senza contraddizioni.
+            </div>
+          </div>
+          <div style="background: #ffffff; padding: 12px; border-radius: var(--radius); border: 1px solid #fde68a;">
+            <div style="font-weight: 700; font-size: 13px; color: #b45309; margin-bottom: 4px;">3️⃣ Knowledge Graph (Nodi & Archi)</div>
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+              Collega Clienti, Tecnologie, Esercizi e Problemi (<code>[Nodo A] ──(RELAZIONE)──&gt; [Nodo B]</code>) e naviga fino a <strong>2 Hop di distanza</strong> per scoprire correlazioni indirette.
+            </div>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #5b21b6; background: #f3e8ff; padding: 10px 12px; border-radius: 6px;">
+          <strong>💡 Come sfruttarlo ogni giorno:</strong> Quando crei o modifichi un Cliente (stack, repo, canone MRR) o completi un To-do importante, il Gestionale aggiorna da solo il Second Brain. Inoltre puoi scrivere appunti liberi nella sezione <strong>🧠 Second Brain</strong> o interrogare i 3 livelli insieme con <em>"Chiedi al Second Brain"</em>.
+        </div>
+      </div>
+
       <!-- Scheda Filosofia Chiave -->
       <div class="card" style="margin-bottom: 20px; border-left: 4px solid var(--accent);">
         <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 8px; color: var(--text-main);">

@@ -64,8 +64,13 @@ class Store {
       expenses: [],
       services_catalog: [],
       trash: [],
+      brain_memories: [],
+      brain_facts: [],
+      brain_nodes: [],
+      brain_edges: [],
     };
     this.listeners = new Set();
+    this.entityHooks = new Set();
     this.init();
   }
 
@@ -105,6 +110,21 @@ class Store {
   subscribe(listener) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  onEntityChange(hook) {
+    this.entityHooks.add(hook);
+    return () => this.entityHooks.delete(hook);
+  }
+
+  emitEntityChange(collection, action, item) {
+    for (const hook of this.entityHooks) {
+      try {
+        hook(collection, action, item);
+      } catch (err) {
+        console.warn('Errore nel hook di sincronizzazione entità:', err);
+      }
+    }
   }
 
   notify() {
@@ -153,6 +173,9 @@ class Store {
     };
     this.data[collection].unshift(newItem);
     this.save();
+    if (collection === 'clients' || collection === 'todos') {
+      this.emitEntityChange(collection, 'create', newItem);
+    }
     return newItem;
   }
 
@@ -167,6 +190,9 @@ class Store {
       updated_at: new Date().toISOString(),
     };
     this.save();
+    if (collection === 'clients' || collection === 'todos') {
+      this.emitEntityChange(collection, 'update', list[index]);
+    }
     return list[index];
   }
 
@@ -206,7 +232,7 @@ class Store {
   // Raccoglie tutti gli elementi attualmente nel cestino
   getAllTrash() {
     const collections = [
-      'clients', 'quotes', 'todos', 'appointments', 'expenses', 'services_catalog', 'payments'
+      'clients', 'quotes', 'todos', 'appointments', 'expenses', 'services_catalog', 'payments', 'brain_memories'
     ];
     const results = [];
     for (const col of collections) {
@@ -220,7 +246,7 @@ class Store {
 
   emptyTrash() {
     const collections = [
-      'clients', 'quotes', 'todos', 'appointments', 'expenses', 'services_catalog', 'payments'
+      'clients', 'quotes', 'todos', 'appointments', 'expenses', 'services_catalog', 'payments', 'brain_memories'
     ];
     for (const col of collections) {
       if (this.data[col]) {
@@ -229,6 +255,49 @@ class Store {
     }
     this.save();
     return true;
+  }
+
+  // --- HELPER SECOND BRAIN (TRI-LAYER) ---
+  getActiveFacts(subject = null) {
+    const facts = (this.data.brain_facts || []).filter(f => !f.is_deleted && f.is_active !== false);
+    if (!subject) return facts;
+    const normSubj = subject.trim().toLowerCase();
+    return facts.filter(f => (f.subject || '').trim().toLowerCase() === normSubj);
+  }
+
+  getFactHistory(subject, fact_key) {
+    const normSubj = (subject || '').trim().toLowerCase();
+    const normKey = (fact_key || '').trim().toLowerCase();
+    return (this.data.brain_facts || [])
+      .filter(f => !f.is_deleted && (f.subject || '').trim().toLowerCase() === normSubj && (f.fact_key || '').trim().toLowerCase() === normKey)
+      .sort((a, b) => new Date(b.valid_from || b.created_at || 0) - new Date(a.valid_from || a.created_at || 0));
+  }
+
+  getBrainGraph() {
+    const nodes = (this.data.brain_nodes || []).filter(n => !n.is_deleted);
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    const edges = (this.data.brain_edges || [])
+      .filter(e => !e.is_deleted && nodeMap.has(e.source_node_id) && nodeMap.has(e.target_node_id))
+      .map(e => {
+        const src = nodeMap.get(e.source_node_id);
+        const tgt = nodeMap.get(e.target_node_id);
+        return {
+          ...e,
+          source_label: src.label,
+          source_type: src.node_type,
+          target_label: tgt.label,
+          target_type: tgt.node_type,
+        };
+      });
+    return { nodes, edges };
+  }
+
+  getMemoriesByDomain(domain = null, tag = null) {
+    return this.getAll('brain_memories').filter(m => {
+      if (domain && domain !== 'all' && m.domain !== domain) return false;
+      if (tag && (!Array.isArray(m.tags) || !m.tags.some(t => t.toLowerCase() === tag.toLowerCase()))) return false;
+      return true;
+    });
   }
 
   // --- QUERY SPECIFICHE PER PREVENTIVI ---
@@ -439,6 +508,10 @@ class Store {
       expenses: [],
       services_catalog: [],
       trash: [],
+      brain_memories: [],
+      brain_facts: [],
+      brain_nodes: [],
+      brain_edges: [],
     };
     this.save();
   }

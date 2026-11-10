@@ -3,6 +3,7 @@
 
 import { store } from '../services/store.js';
 import { processAiPrompt } from '../services/ai.js';
+import { ingestKnowledge, BRAIN_DOMAINS } from '../services/brain.js';
 import { formatCurrency, formatDateTime } from '../utils/formatters.js';
 
 export function openAiModal(options = {}) {
@@ -62,7 +63,23 @@ export function openAiModal(options = {}) {
               </div>
             </div>
 
-            <div style="display: flex; justify-content: flex-end;">
+            <!-- Opzione Second Brain Tri-Layer -->
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding: 10px 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--radius);">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #166534; cursor: pointer;">
+                <input type="checkbox" id="ai-save-to-brain" checked />
+                🧠 Memorizza anche nel Second Brain (estrae Fatti Atomici Mem0 & Knowledge Graph)
+              </label>
+              <select id="ai-brain-domain" class="form-select" style="max-width: 190px; padding: 4px 8px; font-size: 12px;">
+                ${Object.entries(BRAIN_DOMAINS).map(([k, v]) => `
+                  <option value="${k}" ${(preselectedClientId && k === 'client') ? 'selected' : ''}>${v.icon} ${v.label}</option>
+                `).join('')}
+              </select>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 8px;">
+              <button type="button" id="ai-save-brain-only-btn" class="btn btn-secondary">
+                🧠 Salva Solo nel Second Brain
+              </button>
               <button type="button" id="ai-process-btn" class="btn btn-ai" style="padding: 10px 20px;">
                 ⚡ Elabora con l'IA
               </button>
@@ -84,6 +101,9 @@ export function openAiModal(options = {}) {
                 Controlla o modifica le proposte prima di salvare. Nessun record verrà creato senza la tua conferma.
               </div>
             </div>
+
+            <!-- Contesto Second Brain Iniettato -->
+            <div id="ai-brain-context-box" style="display: none; padding: 10px 12px; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: var(--radius); margin-bottom: 16px; font-size: 11px; color: #5b21b6;"></div>
 
             <!-- Proposte Nuovi Clienti (On-boarding) -->
             <div id="ai-clients-section" style="margin-bottom: 20px; display: none;">
@@ -229,6 +249,28 @@ export function openAiModal(options = {}) {
     reader.readAsDataURL(file);
   });
 
+  // Salva direttamente solo nel Second Brain
+  div.querySelector('#ai-save-brain-only-btn')?.addEventListener('click', async () => {
+    const text = textInput.value.trim();
+    if (!text) {
+      alert('Inserisci una nota o un appunto da salvare nel Second Brain.');
+      return;
+    }
+    const domain = div.querySelector('#ai-brain-domain')?.value || 'work';
+    try {
+      const res = await ingestKnowledge({
+        text,
+        domain,
+        sourceType: 'ai_chat',
+      });
+      alert(`Nota memorizzata nel Second Brain!\nFatti estratti/aggiornati: ${res.facts.length}\nRelazioni grafo: ${res.edges.length}`);
+      div.remove();
+      if (onSaved) onSaved();
+    } catch (err) {
+      alert('Errore salvataggio Second Brain: ' + err.message);
+    }
+  });
+
   // Elaborazione Richiesta
   div.querySelector('#ai-process-btn').addEventListener('click', async () => {
     const text = textInput.value.trim();
@@ -268,6 +310,21 @@ export function openAiModal(options = {}) {
     div.querySelector('#ai-summary-text').textContent = data.summary || 'Proposte estratte con successo';
     div.querySelector('#ai-todos-count').textContent = (data.todos || []).length;
     div.querySelector('#ai-appts-count').textContent = (data.appointments || []).length;
+
+    const brainBox = div.querySelector('#ai-brain-context-box');
+    if (brainBox && data.brainContext) {
+      const bc = data.brainContext;
+      if ((bc.activeFacts && bc.activeFacts.length > 0) || (bc.graphConnections && bc.graphConnections.length > 0)) {
+        brainBox.style.display = 'block';
+        brainBox.innerHTML = `
+          <strong>🧠 Contesto Second Brain attivo iniettato:</strong>
+          ${bc.activeFacts.slice(0, 4).map(f => `<span class="badge badge-green" style="margin-left: 4px;">[${f.subject}] ${f.fact_key}: ${f.fact_value}</span>`).join('')}
+          ${bc.graphConnections.slice(0, 3).map(c => `<span class="badge badge-blue" style="margin-left: 4px;">${c.source_label} → ${c.target_label}</span>`).join('')}
+        `;
+      } else {
+        brainBox.style.display = 'none';
+      }
+    }
 
     const clientsSection = div.querySelector('#ai-clients-section');
     const clientsContainer = div.querySelector('#ai-clients-container');
@@ -449,13 +506,31 @@ export function openAiModal(options = {}) {
   });
 
   // Conferma e Salva nel gestionale
-  confirmBtn.addEventListener('click', () => {
+  confirmBtn.addEventListener('click', async () => {
     if (!currentParsedResult) return;
 
     let createdClientsCount = 0;
     let createdTodosCount = 0;
     let createdApptsCount = 0;
+    let savedToBrain = false;
     const clientNameToIdMap = {};
+
+    const shouldSaveToBrain = div.querySelector('#ai-save-to-brain')?.checked;
+    const brainDomain = div.querySelector('#ai-brain-domain')?.value || 'work';
+    const rawPromptText = textInput.value.trim();
+
+    if (shouldSaveToBrain && rawPromptText) {
+      try {
+        await ingestKnowledge({
+          text: rawPromptText,
+          domain: brainDomain,
+          sourceType: 'ai_chat',
+        });
+        savedToBrain = true;
+      } catch (err) {
+        console.warn('Errore salvataggio automatico Second Brain:', err);
+      }
+    }
 
     // 1. Salva nuovi clienti confermati (Onboarding)
     div.querySelectorAll('.ai-include-client:checked').forEach(cb => {
@@ -573,6 +648,7 @@ export function openAiModal(options = {}) {
     if (createdClientsCount > 0) parts.push(`${createdClientsCount} Clienti acquisiti`);
     parts.push(`${createdTodosCount} To-do creati`);
     parts.push(`${createdApptsCount} Eventi in agenda`);
+    if (savedToBrain) parts.push('Conoscenza salvata nel Second Brain');
 
     alert(`Operazione completata: ${parts.join(', ')}.`);
     div.remove();

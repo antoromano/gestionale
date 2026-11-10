@@ -1238,3 +1238,4 @@ async function syncEdgeToSupabase(edge) {
     console.warn('Sync Supabase brain_edges ignorato (modalità local-first):', err.message);
   }
 }
+

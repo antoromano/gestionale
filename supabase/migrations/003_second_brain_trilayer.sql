@@ -161,3 +161,4 @@ CREATE POLICY "Users can manage own brain_nodes" ON public.brain_nodes
 CREATE POLICY "Users can manage own brain_edges" ON public.brain_edges
     FOR ALL USING ((select auth.uid()) = user_id)
     WITH CHECK ((select auth.uid()) = user_id);
+

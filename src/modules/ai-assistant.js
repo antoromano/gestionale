@@ -5,6 +5,7 @@ import { store } from '../services/store.js';
 import { processAiPrompt } from '../services/ai.js';
 import { ingestKnowledge, BRAIN_DOMAINS } from '../services/brain.js';
 import { formatCurrency, formatDateTime } from '../utils/formatters.js';
+import { parseWorkoutNotation } from '../utils/body-parser.js';
 
 export function openAiModal(options = {}) {
   const { preselectedClientId = null, onSaved = null } = options;
@@ -112,6 +113,15 @@ export function openAiModal(options = {}) {
                 <span id="ai-clients-count" class="badge badge-green">0</span>
               </div>
               <div id="ai-clients-container" style="display: flex; flex-direction: column; gap: 10px;"></div>
+            </div>
+
+            <!-- Proposta Diario Body (Biometria, Nutrizione & Allenamento Matrice) -->
+            <div id="ai-body-section" style="margin-bottom: 20px; display: none;">
+              <div style="font-weight: 700; font-size: 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                <span>🏋️ Diario Body Rilevato (Biometria, Macro & Matrice Allenamento)</span>
+                <span class="badge badge-green">Body + Second Brain</span>
+              </div>
+              <div id="ai-body-container"></div>
             </div>
 
             <!-- Proposte To-do -->
@@ -396,6 +406,70 @@ export function openAiModal(options = {}) {
       clientsSection.style.display = 'none';
     }
 
+    // Rendering Diario Body (Biometria, Nutrizione & Allenamento Matrice)
+    const bodySection = div.querySelector('#ai-body-section');
+    const bodyContainer = div.querySelector('#ai-body-container');
+    if (data.body_log && bodySection && bodyContainer) {
+      const bl = data.body_log;
+      bodySection.style.display = 'block';
+      // Se è un body log, pre-imposta il dominio Second Brain su 'body'
+      const domainSelect = div.querySelector('#ai-brain-domain');
+      if (domainSelect) domainSelect.value = 'body';
+
+      bodyContainer.innerHTML = `
+        <div class="card" style="padding: 14px; margin-bottom: 0; border: 1px solid #bbf7d0; background: #f0fdf4;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <label style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: #166534;">
+              <input type="checkbox" id="ai-include-body" checked />
+              Salva nella Matrice Body (${bl.date})
+            </label>
+            <input type="date" id="ai-body-date" class="form-input" style="max-width: 150px; padding: 4px 8px; font-size: 12px;" value="${bl.date}" />
+          </div>
+
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group">
+              <label class="form-label">Peso (kg)</label>
+              <input type="number" step="0.1" id="ai-body-weight" class="form-input" value="${bl.body_weight_kg ?? ''}" placeholder="-" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Sonno (ore)</label>
+              <input type="number" step="0.5" id="ai-body-sleep" class="form-input" value="${bl.sleep_hours ?? ''}" placeholder="-" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Calorie (kcal)</label>
+              <input type="number" step="10" id="ai-body-kcal" class="form-input" value="${bl.calories_kcal ?? ''}" placeholder="-" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Proteine (g)</label>
+              <input type="number" step="1" id="ai-body-protein" class="form-input" value="${bl.protein_g ?? ''}" placeholder="-" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Carbo (g)</label>
+              <input type="number" step="1" id="ai-body-carbs" class="form-input" value="${bl.carbs_g ?? ''}" placeholder="-" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Grassi (g)</label>
+              <input type="number" step="1" id="ai-body-fat" class="form-input" value="${bl.fat_g ?? ''}" placeholder="-" />
+            </div>
+          </div>
+
+          ${(bl.workout_entries || []).length > 0 ? `
+            <div style="font-size: 12px; font-weight: 700; color: #166534; margin-bottom: 6px;">Celle Esercizi Rilevate:</div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              ${bl.workout_entries.map((we, idx) => `
+                <div style="display: flex; gap: 8px; align-items: center; background: #ffffff; padding: 6px 10px; border-radius: 6px; border: 1px solid #bbf7d0;">
+                  <span class="badge badge-blue" style="min-width: 110px; text-align: center;">${we.column_name}</span>
+                  <input type="text" class="form-input ai-body-workout-notation" data-idx="${idx}" data-col-id="${we.column_id}" data-cat="${we.category || 'pull'}" value="${we.raw_notation}" style="font-family: monospace; font-size: 12px;" />
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    } else if (bodySection) {
+      bodySection.style.display = 'none';
+    }
+
     const todosContainer = div.querySelector('#ai-todos-container');
     const apptsContainer = div.querySelector('#ai-appts-container');
 
@@ -512,8 +586,47 @@ export function openAiModal(options = {}) {
     let createdClientsCount = 0;
     let createdTodosCount = 0;
     let createdApptsCount = 0;
+    let savedBodyLog = false;
     let savedToBrain = false;
     const clientNameToIdMap = {};
+
+    // 0. Salva eventuale Diario Body (Biometria + Macro + Celle Allenamento)
+    if (currentParsedResult.body_log && div.querySelector('#ai-include-body')?.checked) {
+      const logDate = div.querySelector('#ai-body-date')?.value || currentParsedResult.body_log.date;
+      const weightVal = div.querySelector('#ai-body-weight')?.value;
+      const sleepVal = div.querySelector('#ai-body-sleep')?.value;
+      const kcalVal = div.querySelector('#ai-body-kcal')?.value;
+      const protVal = div.querySelector('#ai-body-protein')?.value;
+      const carbsVal = div.querySelector('#ai-body-carbs')?.value;
+      const fatVal = div.querySelector('#ai-body-fat')?.value;
+
+      const dailyPayload = { date: logDate };
+      if (weightVal !== '' && weightVal != null) dailyPayload.body_weight_kg = Number(weightVal);
+      if (sleepVal !== '' && sleepVal != null) dailyPayload.sleep_hours = Number(sleepVal);
+      if (kcalVal !== '' && kcalVal != null) dailyPayload.calories_kcal = Number(kcalVal);
+      if (protVal !== '' && protVal != null) dailyPayload.protein_g = Number(protVal);
+      if (carbsVal !== '' && carbsVal != null) dailyPayload.carbs_g = Number(carbsVal);
+      if (fatVal !== '' && fatVal != null) dailyPayload.fat_g = Number(fatVal);
+
+      store.upsertBodyDailyLog(dailyPayload);
+
+      div.querySelectorAll('.ai-body-workout-notation').forEach(inp => {
+        const raw_notation = inp.value.trim();
+        const column_id = inp.dataset.colId;
+        const category = inp.dataset.cat || 'pull';
+        if (raw_notation && column_id) {
+          const parsed = parseWorkoutNotation(raw_notation, category);
+          store.upsertBodyWorkoutEntry({
+            date: logDate,
+            column_id,
+            raw_notation,
+            parsed_blocks: parsed.blocks,
+          });
+        }
+      });
+
+      savedBodyLog = true;
+    }
 
     const shouldSaveToBrain = div.querySelector('#ai-save-to-brain')?.checked;
     const brainDomain = div.querySelector('#ai-brain-domain')?.value || 'work';
@@ -645,12 +758,13 @@ export function openAiModal(options = {}) {
     });
 
     const parts = [];
+    if (savedBodyLog) parts.push('Diario Body registrato');
     if (createdClientsCount > 0) parts.push(`${createdClientsCount} Clienti acquisiti`);
-    parts.push(`${createdTodosCount} To-do creati`);
-    parts.push(`${createdApptsCount} Eventi in agenda`);
+    if (createdTodosCount > 0) parts.push(`${createdTodosCount} To-do creati`);
+    if (createdApptsCount > 0) parts.push(`${createdApptsCount} Eventi in agenda`);
     if (savedToBrain) parts.push('Conoscenza salvata nel Second Brain');
 
-    alert(`Operazione completata: ${parts.join(', ')}.`);
+    alert(`Operazione completata: ${parts.join(', ') || 'Nessun elemento selezionato'}.`);
     div.remove();
     if (onSaved) onSaved();
   });

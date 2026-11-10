@@ -22,6 +22,12 @@ import {
   upsertGraphRelationship,
   querySecondBrain,
 } from '../src/services/brain.js';
+import {
+  parseWorkoutNotation,
+  calculateColumnRecoveryStatus,
+  calculateBodyTrends,
+  DEFAULT_BODY_COLUMNS,
+} from '../src/utils/body-parser.js';
 
 describe('1. Calcoli Economici Voci di Preventivo', () => {
   it('calcola correttamente il netto di una voce con quantità, prezzo e sconto', () => {
@@ -454,5 +460,138 @@ describe('9. Second Brain: Architettura Cognitiva Tri-Layer Ibrida', () => {
 
     const mrrHistory = store.getFactHistory('AlfaCloud Srl', 'canone_mrr');
     expect(mrrHistory.length).toBe(2);
+  });
+});
+
+describe('10. Modulo Body: Parser Notazione, Semaforo 2-3gg, Media Mobile Peso & Second Brain Sync', () => {
+  beforeEach(() => {
+    store.clearAll();
+  });
+
+  it('1. parseWorkoutNotation interpreta carichi, serie, moltiplicatori (10x5), varianti con parole complete, sigle legacy e Singolo Arto', () => {
+    // 1a. Carico e serie standard: 20(10,10,10,10)
+    const p1 = parseWorkoutNotation('20(10,10,10,10)', 'pull');
+    expect(p1.blocks.length).toBe(1);
+    expect(p1.blocks[0].load_kg).toBe(20);
+    expect(p1.blocks[0].sets).toEqual([10, 10, 10, 10]);
+    expect(p1.blocks[0].total_sets).toBe(4);
+    expect(p1.blocks[0].total_reps).toBe(40);
+    expect(p1.blocks[0].tonnage_kg).toBe(800);
+
+    // 1b. Moltiplicatore rapido corpo libero: 10x5
+    const p2 = parseWorkoutNotation('10x5', 'push');
+    expect(p2.blocks[0].load_kg).toBe(0);
+    expect(p2.blocks[0].sets).toEqual([10, 10, 10, 10, 10]);
+    expect(p2.blocks[0].total_reps).toBe(50);
+
+    // 1c. Sigla legacy S -> espande automaticamente in "Singolo Arto" (unilateral: true)
+    const p3 = parseWorkoutNotation('10S(10,10,10)', 'legs_post');
+    expect(p3.blocks[0].unilateral).toBe(true);
+    expect(p3.blocks[0].execution_mode).toBe('Singolo Arto');
+    expect(p3.blocks[0].load_kg).toBe(10);
+    expect(p3.blocks[0].sets).toEqual([10, 10, 10]);
+    expect(p3.normalized_notation).toContain('Singolo Arto');
+
+    // 1d. Blocchi multipli separati da "+" e mappatura W -> "Presa Larga", PP -> "Pseudo Planche"
+    const p4 = parseWorkoutNotation('30(5,6,6) + W(15,15)', 'pull');
+    expect(p4.blocks.length).toBe(2);
+    expect(p4.blocks[0].load_kg).toBe(30);
+    expect(p4.blocks[0].variant_name).toBe('Standard');
+    expect(p4.blocks[1].variant_name).toBe('Presa Larga');
+    expect(p4.blocks[1].sets).toEqual([15, 15]);
+    expect(p4.total_sets).toBe(5);
+    expect(p4.total_reps).toBe(47);
+
+    // 1e. Cardio & Sport testuale: "1h basket"
+    const p5 = parseWorkoutNotation('1h basket', 'cardio');
+    expect(p5.blocks.length).toBe(1);
+    expect(p5.blocks[0].duration_minutes).toBe(60);
+    expect(p5.blocks[0].variant_name.toLowerCase()).toContain('basket');
+  });
+
+  it('2. calculateColumnRecoveryStatus calcola il semaforo di recupero sulla finestra 2-3 giorni', () => {
+    const col = DEFAULT_BODY_COLUMNS[0]; // Pull Up (target 3gg)
+    const refDate = '2026-11-10';
+
+    // Allenato ieri (1 giorno fa) -> recovery (blu)
+    const s1 = calculateColumnRecoveryStatus(col, [{ column_id: col.id, date: '2026-11-09', raw_notation: '20(10,10,10)' }], refDate);
+    expect(s1.days_since_last).toBe(1);
+    expect(s1.status).toBe('recovery');
+
+    // Allenato 2 giorni fa -> optimal (verde, finestra ideale 2-3gg)
+    const s2 = calculateColumnRecoveryStatus(col, [{ column_id: col.id, date: '2026-11-08', raw_notation: '20(10,10,10)' }], refDate);
+    expect(s2.days_since_last).toBe(2);
+    expect(s2.status).toBe('optimal');
+
+    // Allenato 5 giorni fa -> overdue (rosso/arancio, priorità oggi)
+    const s3 = calculateColumnRecoveryStatus(col, [{ column_id: col.id, date: '2026-11-05', raw_notation: '20(10,10,10)' }], refDate);
+    expect(s3.days_since_last).toBe(5);
+    expect(s3.status).toBe('overdue');
+  });
+
+  it('3. calculateBodyTrends calcola la media mobile a 7 giorni del peso e le medie nutrizionali', () => {
+    const dailyLogs = [
+      { date: '2026-11-08', body_weight_kg: 75.0, sleep_hours: 7.5, calories_kcal: 2400, protein_g: 160, carbs_g: 280, fat_g: 70 },
+      { date: '2026-11-09', body_weight_kg: 75.6, sleep_hours: 8.0, calories_kcal: 2600, protein_g: 170, carbs_g: 300, fat_g: 75 },
+      { date: '2026-11-10', body_weight_kg: 75.3, sleep_hours: 7.0, calories_kcal: 2500, protein_g: 165, carbs_g: 290, fat_g: 74 },
+    ];
+
+    const trends = calculateBodyTrends({
+      dailyLogs,
+      workoutEntries: [],
+      columns: DEFAULT_BODY_COLUMNS,
+    });
+
+    expect(trends.weightMovingAverageSeries.length).toBe(3);
+    // Media mobile su (75.0 + 75.6 + 75.3) / 3 = 75.30
+    expect(trends.avgWeight7d).toBe(75.3);
+    expect(trends.avgCalories7d).toBe(2500);
+    expect(trends.avgProtein7d).toBe(165);
+  });
+
+  it('4. l\'Assistente IA estrae un Body Log completo dal linguaggio naturale e lo sincronizza col Second Brain', async () => {
+    const prompt = 'Oggi peso 75.3kg, dormito 7.5 ore, 2500 kcal con 165g proteine, 290g carbo e 75g grassi. Allenamento: Pull up 30(7,8,8) e presa larga (15,15), Affondi 20(15,15,15), Stacchi singolo arto 10(12,12), 1h basket';
+
+    const res = await processAiPrompt({ prompt });
+    expect(res.body_log).toBeDefined();
+    expect(res.body_log).not.toBeNull();
+    expect(res.body_log.body_weight_kg).toBe(75.3);
+    expect(res.body_log.sleep_hours).toBe(7.5);
+    expect(res.body_log.calories_kcal).toBe(2500);
+    expect(res.body_log.protein_g).toBe(165);
+    expect(res.body_log.carbs_g).toBe(290);
+    expect(res.body_log.fat_g).toBe(75);
+    expect(res.body_log.workout_entries.length).toBeGreaterThanOrEqual(4);
+
+    // Salva nel store e verifica l'auto-sync con il Second Brain (Livello 2 Mem0 + Livello 3 Grafo)
+    store.upsertBodyDailyLog({
+      date: res.body_log.date,
+      body_weight_kg: res.body_log.body_weight_kg,
+      sleep_hours: res.body_log.sleep_hours,
+      calories_kcal: res.body_log.calories_kcal,
+      protein_g: res.body_log.protein_g,
+      carbs_g: res.body_log.carbs_g,
+      fat_g: res.body_log.fat_g,
+    });
+
+    for (const we of res.body_log.workout_entries) {
+      store.upsertBodyWorkoutEntry({
+        date: res.body_log.date,
+        column_id: we.column_id,
+        raw_notation: we.raw_notation,
+        parsed_blocks: we.parsed_blocks,
+      });
+    }
+
+    const activeAntonioFacts = store.getActiveFacts('Antonio');
+    expect(activeAntonioFacts.some(f => f.fact_key === 'peso_corporeo' && f.fact_value.includes('75.3'))).toBe(true);
+    expect(activeAntonioFacts.some(f => f.fact_key === 'apporto_calorico' && f.fact_value.includes('2500'))).toBe(true);
+
+    const activeWorkoutFacts = store.getActiveFacts('Allenamento');
+    expect(activeWorkoutFacts.some(f => f.fact_key.includes('pull_up') && f.fact_value.includes('30kg'))).toBe(true);
+
+    const { nodes, edges } = store.getBrainGraph();
+    expect(nodes.some(n => n.label === 'Pull Up' && n.node_type === 'exercise')).toBe(true);
+    expect(edges.some(e => e.relation_type === 'PRATICA')).toBe(true);
   });
 });

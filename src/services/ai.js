@@ -4,6 +4,7 @@
 import { store } from './store.js';
 import { getSupabase } from './supabase.js';
 import { querySecondBrain } from './brain.js';
+import { DEFAULT_BODY_COLUMNS, parseWorkoutNotation } from '../utils/body-parser.js';
 
 export async function processAiPrompt({
   prompt,
@@ -48,7 +49,7 @@ export async function processAiPrompt({
       const { data, error } = await supabase.functions.invoke('gemini-assistant', {
         body: payload,
       });
-      if (!error && data && (data.todos || data.appointments)) {
+      if (!error && data && (data.todos || data.appointments || data.body_log)) {
         return {
           ...normalizeAiResponse(data, existingClients, preselectedClientId),
           brainContext,
@@ -81,11 +82,12 @@ async function callDirectGemini(apiKey, payload, existingClients, preselectedCli
     : 'Nessun cliente registrato.';
 
   const systemInstruction = `
-Sei l'assistente operativo e on-boarding per un software engineer/sviluppatore freelance.
-Il tuo compito è analizzare la richiesta (anche note informali, audio trascritto o descrizioni lunghe di clienti con cui si lavora già da mesi) ed estrarre:
+Sei l'assistente operativo, on-boarding e bio-tracker per un software engineer/sviluppatore freelance.
+Il tuo compito è analizzare la richiesta (anche note informali, audio trascritto, descrizioni di clienti o diario Body di allenamento/nutrizione) ed estrarre:
 1. "clients_to_create": se l'utente descrive un cliente da registrare/importare (nome, azienda, email, telefono, staging_url, production_url, github_repo, stack tecnologico, canone di manutenzione mensile/annuale, note).
 2. "todos": attività operative e to-do da svolgere.
 3. "appointments": appuntamenti, rilasci/deploy, demo sprint, call tecniche o scadenze server/domini.
+4. "body_log": se l'utente menziona peso corporeo, ore di sonno, calorie/macronutrienti (proteine, carbo, grassi) o esercizi svolti (Pull Up, Dips, Push Up, Affondi, Squat / Sissy, Femo, Stacchi, Cardio & Sport con notazione es. "30(7,8,8) + Presa Larga (15,15)", "Singolo Arto 10(12,12)").
 
 Data odierna: ${payload.currentDateIso}
 Fuso orario: ${payload.timezone}
@@ -119,7 +121,19 @@ SCHEMA JSON DA RESTITUIRE OBBLIGATORIAMENTE (e nient'altro):
   ],
   "appointments": [
     { "title": "string", "description": "string", "location": "string", "client_id": "string|null", "client_name_proposed": "string", "start_time": "YYYY-MM-DDTHH:mm:ss", "end_time": "string|null", "is_all_day": false, "activity_type": "deploy"|"demo"|"call"|"server_deadline"|"general", "compensation_amount": 0 }
-  ]
+  ],
+  "body_log": {
+    "date": "YYYY-MM-DD",
+    "sleep_hours": null,
+    "body_weight_kg": null,
+    "calories_kcal": null,
+    "protein_g": null,
+    "carbs_g": null,
+    "fat_g": null,
+    "workout_entries": [
+      { "column_slug": "pull_up|dips|push_up|lunges|squat_sissy|hamstrings|deadlift|cardio_sport", "column_name": "string", "raw_notation": "string" }
+    ]
+  }
 }
 `;
 
@@ -153,6 +167,104 @@ SCHEMA JSON DA RESTITUIRE OBBLIGATORIAMENTE (e nient'altro):
   return normalizeAiResponse(parsed, existingClients, preselectedClientId);
 }
 
+// Estrazione euristica Body Log (Biometria, Macro e Allenamento Matrice)
+export function extractBodyLogFromText(text = '') {
+  if (!text || !text.trim()) return null;
+
+  const weightMatch = text.match(/(?:peso(?:\s+corporeo)?[:\s]*|pesato\s*)(\d{2,3}(?:[.,]\d{1,2})?)\s*kg\b/i)
+    || text.match(/\b(\d{2,3}[.,]\d{1,2})\s*kg\b/i);
+  const sleepMatch = text.match(/(?:dormito|sonno)[:\s]*(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:ore|h\b)/i)
+    || text.match(/\b(\d{1,2}(?:[.,]\d{1,2})?)\s*ore\s+di\s+sonno/i);
+  const kcalMatch = text.match(/(\d{3,4})\s*(?:kcal|calorie)\b/i);
+  const protMatch = text.match(/(\d{2,3})\s*g?\s*(?:proteine|prot\b|pro\b)/i)
+    || text.match(/(?:proteine|prot)[:\s]*(\d{2,3})\s*g?\b/i);
+  const carbsMatch = text.match(/(\d{2,3})\s*g?\s*(?:carboidrati|carbo\b|cho\b)/i)
+    || text.match(/(?:carboidrati|carbo)[:\s]*(\d{2,3})\s*g?\b/i);
+  const fatMatch = text.match(/(\d{1,3})\s*g?\s*(?:grassi|fat\b|lipidi)/i)
+    || text.match(/(?:grassi|fat)[:\s]*(\d{1,3})\s*g?\b/i);
+
+  const columns = store.getBodyColumns?.() || DEFAULT_BODY_COLUMNS;
+  const colFind = (slug, fallbackId) => columns.find(c => c.slug === slug || c.id === fallbackId) || { id: fallbackId, name: slug, category: 'pull', slug };
+
+  const exerciseMatchers = [
+    { col: colFind('pull_up', 'col-pull-up'), regex: /\b(?:pull[\s-]*up|trazioni|chin[\s-]*up)\b\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/gi },
+    { col: colFind('dips', 'col-dips'), regex: /\b(?:dips|dip|parallele)\b\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/gi },
+    { col: colFind('push_up', 'col-push-up'), regex: /\b(?:push[\s-]*up|piegamenti|flessioni|pike|pseudo\s+planche)\b\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/gi },
+    { col: colFind('lunges', 'col-affondi'), regex: /\b(?:affondi(?:\s+bulgari|\s+camminati)?|bulgarian\s+split\s+squat)\b\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/gi },
+    { col: colFind('squat_sissy', 'col-squat-sissy'), regex: /\b(?:squat|sissy(?:\s+squat)?|pistol\s+squat)\b\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/gi },
+    { col: colFind('hamstrings', 'col-femo'), regex: /\b(?:femo|femorali|nordic\s+curl|leg\s+curl|sliding\s+curl)\b\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/gi },
+    { col: colFind('deadlift', 'col-stacchi'), regex: /\b(?:stacchi(?:\s+rumeni|\s+sumo)?|stacco|rdl|deadlift)\b\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/gi },
+  ];
+
+  const workoutMap = new Map();
+
+  for (const item of exerciseMatchers) {
+    let m;
+    while ((m = item.regex.exec(text)) !== null) {
+      let rawSeg = (m[1] || '').trim();
+      // Normalizza eventuale "e <variante> (...)" interno allo stesso esercizio in " + <variante> (...)"
+      rawSeg = rawSeg.replace(/\s+e\s+(?=(?:presa|anelli|archer|isometr|singolo|monopod|sissy|rumeno|bulgar|\d+\s*\(|\())/gi, ' + ');
+      if (rawSeg && /\d/.test(rawSeg)) {
+        const prev = workoutMap.get(item.col.id);
+        const combined = prev ? `${prev.raw_notation} + ${rawSeg}` : rawSeg;
+        workoutMap.set(item.col.id, {
+          column_id: item.col.id,
+          column_slug: item.col.slug,
+          column_name: item.col.name,
+          category: item.col.category,
+          raw_notation: combined,
+        });
+      }
+    }
+  }
+
+  // Rilevamento Cardio & Sport (es. "1h basket", "45 min corsa", "calcetto 1h", "stretching 20 min")
+  const cardioCol = colFind('cardio_sport', 'col-cardio-sport');
+  const cardioMatches = text.match(/\b(?:\d+(?:[.,]\d+)?\s*(?:h|ora|ore|min|minuti|'|\bkm)\s*(?:di\s+)?(?:basket|corsa|running|calcetto|bici|nuoto|corda|stretching|camminata|padel|tennis|cardio)|(?:basket|corsa|running|calcetto|bici|nuoto|corda|stretching|padel|tennis)\s+\d+(?:[.,]\d+)?\s*(?:h|ora|ore|min|minuti|'|km))\b/gi);
+  if (cardioMatches && cardioMatches.length > 0) {
+    workoutMap.set(cardioCol.id, {
+      column_id: cardioCol.id,
+      column_slug: cardioCol.slug,
+      column_name: cardioCol.name,
+      category: 'cardio',
+      raw_notation: cardioMatches.map(s => s.trim()).join(' + '),
+    });
+  }
+
+  const workout_entries = Array.from(workoutMap.values()).map(entry => {
+    const parsed = parseWorkoutNotation(entry.raw_notation, entry.category);
+    return {
+      ...entry,
+      raw_notation: parsed.normalized_notation || entry.raw_notation,
+      parsed_blocks: parsed.blocks,
+    };
+  });
+
+  const hasBiometrics = Boolean(weightMatch || sleepMatch || kcalMatch || protMatch || carbsMatch || fatMatch);
+  if (!hasBiometrics && workout_entries.length === 0) {
+    return null;
+  }
+
+  const now = new Date();
+  let logDate = now.toISOString().split('T')[0];
+  if (/\bieri\b/i.test(text)) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 1);
+    logDate = d.toISOString().split('T')[0];
+  }
+
+  return {
+    date: logDate,
+    sleep_hours: sleepMatch ? parseFloat(sleepMatch[1].replace(',', '.')) : null,
+    body_weight_kg: weightMatch ? parseFloat(weightMatch[1].replace(',', '.')) : null,
+    calories_kcal: kcalMatch ? parseInt(kcalMatch[1], 10) : null,
+    protein_g: protMatch ? parseInt(protMatch[1], 10) : null,
+    carbs_g: carbsMatch ? parseInt(carbsMatch[1], 10) : null,
+    fat_g: fatMatch ? parseInt(fatMatch[1], 10) : null,
+    workout_entries,
+  };
+}
+
 // Parser locale intelligente per fallback
 function localHeuristicParser(text = '', existingClients = [], preselectedClientId = null) {
   const result = {
@@ -160,6 +272,7 @@ function localHeuristicParser(text = '', existingClients = [], preselectedClient
     clients_to_create: [],
     todos: [],
     appointments: [],
+    body_log: null,
   };
 
   if (!text.trim()) {
@@ -167,6 +280,17 @@ function localHeuristicParser(text = '', existingClients = [], preselectedClient
   }
 
   const lowerText = text.toLowerCase();
+
+  // 0. Riconoscimento Diario Body (Biometria, Kcal/Macro e Allenamenti)
+  const extractedBodyLog = extractBodyLogFromText(text);
+  if (extractedBodyLog) {
+    result.body_log = extractedBodyLog;
+    const parts = [];
+    if (extractedBodyLog.body_weight_kg) parts.push(`${extractedBodyLog.body_weight_kg} kg`);
+    if (extractedBodyLog.calories_kcal) parts.push(`${extractedBodyLog.calories_kcal} kcal`);
+    if (extractedBodyLog.workout_entries.length > 0) parts.push(`${extractedBodyLog.workout_entries.length} esercizi`);
+    result.summary = `Rilevato Log Body giornaliero (${parts.join(' · ')})`;
+  }
 
   // 1. Riconoscimento On-boarding Nuovo Cliente / Cliente Storico
   // Es: "Lavoro da mesi con Marco di TechCorp, canone 300€/mese, sito techcorp.it, staging stage.techcorp.it, repo antoromano/techcorp-web, stack Next.js e Supabase"
@@ -354,6 +478,11 @@ function localHeuristicParser(text = '', existingClients = [], preselectedClient
       continue;
     }
 
+    // Salta clausole che appartengono al Diario Body (peso, sonno, kcal, macro o serie di allenamento)
+    if (result.body_log && /(?:peso|kg\b|dormito|sonno|kcal|calorie|proteine|carbo|grassi|allenamento|pull[\s-]*up|trazioni|dips|push[\s-]*up|piegamenti|affondi|squat|sissy|femo|stacchi|basket|corsa|calcetto|presa\s+larga|singolo\s+arto|\d+\s*\(\d+)/i.test(clause)) {
+      continue;
+    }
+
     if (isAppointment) {
       const startTime = dueDate || new Date(now.getTime() + 24 * 3600 * 1000).toISOString();
       const endTime = new Date(new Date(startTime).getTime() + 1 * 3600 * 1000).toISOString();
@@ -438,10 +567,58 @@ function normalizeAiResponse(data, existingClients, preselectedClientId) {
     };
   });
 
+  let body_log = null;
+  if (data.body_log && typeof data.body_log === 'object') {
+    const columns = store.getBodyColumns?.() || DEFAULT_BODY_COLUMNS;
+    const rawEntries = Array.isArray(data.body_log.workout_entries) ? data.body_log.workout_entries : [];
+    const workout_entries = rawEntries
+      .filter(e => e && e.raw_notation)
+      .map(e => {
+        const col = columns.find(c =>
+          c.id === e.column_id
+          || c.slug === e.column_slug
+          || c.name.toLowerCase() === String(e.column_name || '').toLowerCase()
+        ) || columns[0];
+        const parsed = parseWorkoutNotation(e.raw_notation, col?.category || 'pull');
+        return {
+          column_id: col?.id || 'col-pull-up',
+          column_slug: col?.slug || 'pull_up',
+          column_name: col?.name || e.column_name || 'Esercizio',
+          category: col?.category || 'pull',
+          raw_notation: parsed.normalized_notation || e.raw_notation,
+          parsed_blocks: parsed.blocks,
+        };
+      });
+
+    const hasAnyValue = Boolean(
+      data.body_log.sleep_hours
+      || data.body_log.body_weight_kg
+      || data.body_log.calories_kcal
+      || data.body_log.protein_g
+      || data.body_log.carbs_g
+      || data.body_log.fat_g
+      || workout_entries.length > 0
+    );
+
+    if (hasAnyValue) {
+      body_log = {
+        date: data.body_log.date || new Date().toISOString().split('T')[0],
+        sleep_hours: data.body_log.sleep_hours != null ? Number(data.body_log.sleep_hours) : null,
+        body_weight_kg: data.body_log.body_weight_kg != null ? Number(data.body_log.body_weight_kg) : null,
+        calories_kcal: data.body_log.calories_kcal != null ? Number(data.body_log.calories_kcal) : null,
+        protein_g: data.body_log.protein_g != null ? Number(data.body_log.protein_g) : null,
+        carbs_g: data.body_log.carbs_g != null ? Number(data.body_log.carbs_g) : null,
+        fat_g: data.body_log.fat_g != null ? Number(data.body_log.fat_g) : null,
+        workout_entries,
+      };
+    }
+  }
+
   return {
     summary: data.summary || 'Proposte estratte con successo',
     clients_to_create,
     todos,
     appointments,
+    body_log,
   };
 }

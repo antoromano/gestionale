@@ -4,6 +4,7 @@
 import { store } from './services/store.js';
 import { renderDashboard } from './modules/dashboard.js';
 import { renderBrain } from './modules/brain.js';
+import { renderBody } from './modules/body.js';
 import { renderTodos } from './modules/todos.js';
 import { renderClients } from './modules/clients.js';
 import { renderCalendar } from './modules/calendar.js';
@@ -33,6 +34,7 @@ class Router {
     this.routes = {
       dashboard: { title: 'Dashboard Operativa', render: renderDashboard },
       brain: { title: 'Second Brain • Architettura Cognitiva Tri-Layer', render: renderBrain },
+      body: { title: 'Body • Diario Allenamenti, Biometria & Macro', render: renderBody },
       todos: { title: 'To-do', render: renderTodos },
       clients: { title: 'Clienti', render: renderClients },
       calendar: { title: 'Calendario & Agenda', render: renderCalendar },

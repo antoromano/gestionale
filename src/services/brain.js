@@ -4,6 +4,11 @@
 
 import { store } from './store.js';
 import { getSupabase } from './supabase.js';
+import {
+  parseWorkoutNotation,
+  calculateBodyTrends,
+  calculateColumnRecoveryStatus,
+} from '../utils/body-parser.js';
 
 export const BRAIN_DOMAINS = {
   work: { label: 'Lavoro / Dev', icon: '💻', badge: 'badge-blue' },
@@ -1147,12 +1152,237 @@ export function syncTodoToBrain(todo) {
   }
 }
 
-// Registra l'hook automatico sullo store per mantenere sincronizzati Clienti e To-do col Second Brain
+/**
+ * AUTO-SYNC CON IL MODULO BODY: Sincronizza la riga giornaliera (Peso, Sonno, Kcal, Macro) nel Second Brain
+ */
+export function syncBodyDailyLogToBrain(dailyLog) {
+  if (!dailyLog || dailyLog.is_deleted || isSyncingEntity) return;
+  isSyncingEntity = true;
+  try {
+    if (Number(dailyLog.body_weight_kg) > 0) {
+      upsertFact({
+        subject: 'Antonio',
+        fact_key: 'peso_corporeo',
+        fact_value: `${Number(dailyLog.body_weight_kg).toFixed(1)} kg`,
+        category: 'metric',
+      });
+      upsertNode({
+        label: 'Peso Corporeo',
+        node_type: 'biometric',
+        properties: { latest_kg: Number(dailyLog.body_weight_kg), date: dailyLog.date },
+      });
+    }
+
+    if (Number(dailyLog.sleep_hours) > 0) {
+      upsertFact({
+        subject: 'Antonio',
+        fact_key: 'sonno_ore',
+        fact_value: `${Number(dailyLog.sleep_hours)} h`,
+        category: 'metric',
+      });
+      upsertNode({
+        label: 'Sonno',
+        node_type: 'biometric',
+        properties: { latest_hours: Number(dailyLog.sleep_hours), date: dailyLog.date },
+      });
+    }
+
+    if (Number(dailyLog.calories_kcal) > 0) {
+      upsertFact({
+        subject: 'Antonio',
+        fact_key: 'apporto_calorico',
+        fact_value: `${Number(dailyLog.calories_kcal)} kcal`,
+        category: 'metric',
+      });
+    }
+
+    if (Number(dailyLog.protein_g) > 0 || Number(dailyLog.carbs_g) > 0 || Number(dailyLog.fat_g) > 0) {
+      const p = Number(dailyLog.protein_g) || 0;
+      const c = Number(dailyLog.carbs_g) || 0;
+      const f = Number(dailyLog.fat_g) || 0;
+      upsertFact({
+        subject: 'Antonio',
+        fact_key: 'macronutrienti_giornalieri',
+        fact_value: `Proteine ${p}g • Carboidrati ${c}g • Grassi ${f}g`,
+        category: 'metric',
+      });
+    }
+  } finally {
+    isSyncingEntity = false;
+  }
+}
+
+/**
+ * AUTO-SYNC CON IL MODULO BODY: Sincronizza una cella d'allenamento (Esercizio, Carico, Serie, Varianti, Singolo Arto) nel Second Brain
+ */
+export function syncBodyWorkoutEntryToBrain(entry) {
+  if (!entry || entry.is_deleted || !entry.raw_notation || isSyncingEntity) return;
+  isSyncingEntity = true;
+  try {
+    const columns = store.getBodyColumns();
+    const col = columns.find(c => c.id === entry.column_id);
+    const colName = col ? col.name : 'Esercizio';
+    const colSlug = (col?.slug || colName).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+
+    const parsed = Array.isArray(entry.parsed_blocks) && entry.parsed_blocks.length > 0
+      ? {
+          blocks: entry.parsed_blocks,
+          summary_label: entry.parsed_blocks.map(b => b.display_label).join(' + '),
+        }
+      : parseWorkoutNotation(entry.raw_notation, col?.category || 'pull');
+
+    // Nodo esercizio e legame con Antonio
+    upsertGraphRelationship({
+      source: 'Antonio',
+      source_type: 'person',
+      target: colName,
+      target_type: 'exercise',
+      relation_type: 'PRATICA',
+      evidence: `Sessione del ${entry.date}: ${entry.raw_notation}`,
+    });
+
+    // Fatto complessivo per la colonna esercizio
+    upsertFact({
+      subject: 'Allenamento',
+      fact_key: colSlug,
+      fact_value: parsed.summary_label || entry.raw_notation,
+      category: 'metric',
+    });
+
+    // Fatti atomici per ciascun blocco/variante (es. Pull Up Standard, Stacchi Singolo Arto)
+    for (const block of parsed.blocks || []) {
+      const varSlug = (block.variant_name || 'standard').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+      const uniSlug = block.unilateral ? '_singolo_arto' : '';
+      const key = `${colSlug}_${varSlug}${uniSlug}`;
+
+      let valStr = '';
+      if (block.type === 'cardio') {
+        valStr = block.display_label || block.activity_name;
+      } else {
+        const loadPart = block.load_kg > 0 ? `${block.load_kg}kg ` : 'Corpo libero ';
+        const setsPart = `(${(block.sets || []).join(', ')})`;
+        const modePart = block.unilateral ? ' • Singolo Arto' : '';
+        valStr = `${loadPart}${setsPart}${modePart}`;
+      }
+
+      upsertFact({
+        subject: 'Allenamento',
+        fact_key: key,
+        fact_value: valStr.trim(),
+        category: 'metric',
+      });
+
+      if (block.variant_name && block.variant_name !== 'Standard') {
+        upsertGraphRelationship({
+          source: colName,
+          source_type: 'exercise',
+          target: block.variant_name,
+          target_type: 'exercise',
+          relation_type: 'VARIANTE',
+          evidence: `${colName}: ${valStr}`,
+        });
+      }
+    }
+
+    // Se sono presenti note tecniche o fastidi, crea relazione nel Knowledge Graph
+    if (entry.feeling === 'dolore_fastidio' || (entry.detailed_notes && /dolore|fastidio|tensione|affaticamento/i.test(entry.detailed_notes))) {
+      const issueLabel = entry.detailed_notes ? entry.detailed_notes.slice(0, 60) : `Fastidio in ${colName}`;
+      upsertGraphRelationship({
+        source: colName,
+        source_type: 'exercise',
+        target: issueLabel,
+        target_type: 'issue',
+        relation_type: 'CAUSA',
+        evidence: `Rilevato il ${entry.date}`,
+      });
+    }
+  } finally {
+    isSyncingEntity = false;
+  }
+}
+
+/**
+ * Analisi Cognitiva Incrociata (Body + Second Brain):
+ * Incrocia Sonno, Kcal/Macro, Peso e Progressioni negli esercizi per generare insight operativi
+ */
+export function analyzeBodyWithSecondBrain() {
+  const columns = store.getBodyColumns();
+  const dailyLogs = store.getAll('body_daily_logs');
+  const workoutEntries = store.getAll('body_workout_entries');
+  const trends = calculateBodyTrends(dailyLogs, workoutEntries, columns);
+
+  const recoveryStatuses = columns.map(col => ({
+    column: col,
+    recovery: calculateColumnRecoveryStatus(col.id, workoutEntries, col.target_frequency_days || 3),
+  }));
+
+  const recommendedToday = recoveryStatuses
+    .filter(r => r.recovery.isRecommendedToday)
+    .map(r => `${r.column.name} (${r.recovery.shortBadge})`);
+
+  const insights = [];
+
+  if (trends.avgWeight7d !== null) {
+    const deltaStr = trends.weightDelta7d > 0
+      ? `+${trends.weightDelta7d} kg`
+      : `${trends.weightDelta7d} kg`;
+    insights.push(
+      `⚖️ **Trend Peso Corporeo (Media Mobile 7gg):** **${trends.avgWeight7d} kg** (${deltaStr} rispetto alla settimana precedente).`
+    );
+  }
+
+  if (trends.avgSleep7d !== null) {
+    const sleepMsg = trends.avgSleep7d < 7
+      ? `⚠️ Media sonno sotto le 7 ore (${trends.avgSleep7d} h): considera di gestire il buffer (RPE ≤ 8) sui fondamentali pesanti.`
+      : `✅ Ottimo recupero neurale: media sonno di **${trends.avgSleep7d} h** negli ultimi 7 giorni.`;
+    insights.push(`😴 **Sonno & Recupero:** ${sleepMsg}`);
+  }
+
+  if (trends.avgCalories7d !== null) {
+    insights.push(
+      `🍽️ **Bilancio Nutrizionale & Macro (Media 7gg):** **${trends.avgCalories7d} kcal/giorno** — Proteine: **${trends.avgProtein7d || 0}g**, Carboidrati: **${trends.avgCarbs7d || 0}g**, Grassi: **${trends.avgFat7d || 0}g**.`
+    );
+  }
+
+  if (recommendedToday.length > 0) {
+    insights.push(
+      `🎯 **Focus Consigliato Oggi (Finestra 2-3+ giorni):** ${recommendedToday.join(' • ')}.`
+    );
+  }
+
+  // Top PR / Progressioni recenti
+  const prHighlights = [];
+  for (const col of columns) {
+    const prog = trends.exerciseProgressions[col.id];
+    if (prog && prog.sessions_count > 0 && prog.latest_session) {
+      prHighlights.push(
+        `**${col.name}**: ultima sessione \`${prog.latest_session.raw_notation}\` (Picco carico: ${prog.max_load_kg} kg • Max rep: ${prog.max_total_reps} tot)`
+      );
+    }
+  }
+  if (prHighlights.length > 0) {
+    insights.push(`📈 **Stato Progressioni Attive:** ${prHighlights.join(' | ')}.`);
+  }
+
+  return {
+    trends,
+    recoveryStatuses,
+    recommendedToday,
+    insights,
+    summaryText: insights.join('\n'),
+  };
+}
+
+// Registra l'hook automatico sullo store per mantenere sincronizzati Clienti, To-do e Modulo Body col Second Brain
 store.onEntityChange((collection, _action, item) => {
   if (collection === 'clients') {
     syncClientToBrain(item);
   } else if (collection === 'todos') {
     syncTodoToBrain(item);
+  } else if (collection === 'body_daily_logs') {
+    syncBodyDailyLogToBrain(item);
+  } else if (collection === 'body_workout_entries') {
+    syncBodyWorkoutEntryToBrain(item);
   }
 });
 

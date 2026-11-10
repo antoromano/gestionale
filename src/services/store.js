@@ -3,6 +3,7 @@
 // Supports Local Database (IndexedDB / LocalStorage) and Supabase Cloud Sync with RLS
 
 import { generateId } from '../utils/id.js';
+import { DEFAULT_BODY_COLUMNS, parseWorkoutNotation } from '../utils/body-parser.js';
 
 const STORAGE_KEY = 'gestionale_store_v1';
 const SETTINGS_KEY = 'gestionale_settings_v1';
@@ -68,6 +69,9 @@ class Store {
       brain_facts: [],
       brain_nodes: [],
       brain_edges: [],
+      body_exercise_columns: [],
+      body_daily_logs: [],
+      body_workout_entries: [],
     };
     this.listeners = new Set();
     this.entityHooks = new Set();
@@ -173,7 +177,7 @@ class Store {
     };
     this.data[collection].unshift(newItem);
     this.save();
-    if (collection === 'clients' || collection === 'todos') {
+    if (collection === 'clients' || collection === 'todos' || collection === 'body_daily_logs' || collection === 'body_workout_entries') {
       this.emitEntityChange(collection, 'create', newItem);
     }
     return newItem;
@@ -190,7 +194,7 @@ class Store {
       updated_at: new Date().toISOString(),
     };
     this.save();
-    if (collection === 'clients' || collection === 'todos') {
+    if (collection === 'clients' || collection === 'todos' || collection === 'body_daily_logs' || collection === 'body_workout_entries') {
       this.emitEntityChange(collection, 'update', list[index]);
     }
     return list[index];
@@ -298,6 +302,97 @@ class Store {
       if (tag && (!Array.isArray(m.tags) || !m.tags.some(t => t.toLowerCase() === tag.toLowerCase()))) return false;
       return true;
     });
+  }
+
+  // --- HELPER MODULO BODY (MATRICE DIARIO, BIOMETRIA, NUTRIZIONE & ALLENAMENTO) ---
+  getBodyColumns() {
+    if (!Array.isArray(this.data.body_exercise_columns) || this.data.body_exercise_columns.length === 0) {
+      this.data.body_exercise_columns = DEFAULT_BODY_COLUMNS.map(col => ({
+        ...col,
+        is_deleted: false,
+        created_at: new Date().toISOString(),
+      }));
+      this.save();
+    }
+    return this.data.body_exercise_columns
+      .filter(c => !c.is_deleted && c.is_active !== false)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  }
+
+  upsertBodyDailyLog(logData = {}) {
+    const dateStr = String(logData.date || new Date().toISOString().split('T')[0]).split('T')[0];
+    if (!this.data.body_daily_logs) this.data.body_daily_logs = [];
+
+    const existing = this.data.body_daily_logs.find(l => !l.is_deleted && l.date === dateStr);
+    if (existing) {
+      return this.update('body_daily_logs', existing.id, {
+        ...logData,
+        date: dateStr,
+      });
+    }
+    return this.create('body_daily_logs', {
+      sleep_hours: null,
+      sleep_quality: null,
+      body_weight_kg: null,
+      calories_kcal: null,
+      protein_g: null,
+      carbs_g: null,
+      fat_g: null,
+      energy_level: null,
+      is_rest_day: false,
+      general_notes: '',
+      ...logData,
+      date: dateStr,
+    });
+  }
+
+  upsertBodyWorkoutEntry(entryData = {}) {
+    const dateStr = String(entryData.date || new Date().toISOString().split('T')[0]).split('T')[0];
+    const columnId = entryData.column_id;
+    if (!columnId) return null;
+
+    if (!this.data.body_workout_entries) this.data.body_workout_entries = [];
+    const columns = this.getBodyColumns();
+    const colObj = columns.find(c => c.id === columnId);
+
+    // Assicura che esista il daily log corrispondente per quella data
+    let dailyLog = (this.data.body_daily_logs || []).find(l => !l.is_deleted && l.date === dateStr);
+    if (!dailyLog) {
+      dailyLog = this.upsertBodyDailyLog({ date: dateStr });
+    }
+
+    const rawNotation = String(entryData.raw_notation || '').trim();
+    const existing = this.data.body_workout_entries.find(
+      e => !e.is_deleted && e.date === dateStr && e.column_id === columnId
+    );
+
+    if (!rawNotation) {
+      if (existing) {
+        this.permanentDelete('body_workout_entries', existing.id);
+      }
+      return null;
+    }
+
+    const parsed = Array.isArray(entryData.parsed_blocks) && entryData.parsed_blocks.length > 0
+      ? { blocks: entryData.parsed_blocks }
+      : parseWorkoutNotation(rawNotation, colObj?.category || 'pull');
+
+    const payload = {
+      daily_log_id: dailyLog.id,
+      date: dateStr,
+      column_id: columnId,
+      raw_notation: rawNotation,
+      parsed_blocks: parsed.blocks,
+      rpe: entryData.rpe ?? existing?.rpe ?? null,
+      rest_seconds: entryData.rest_seconds ?? existing?.rest_seconds ?? null,
+      feeling: entryData.feeling || existing?.feeling || 'buono',
+      detailed_notes: entryData.detailed_notes !== undefined ? entryData.detailed_notes : (existing?.detailed_notes || ''),
+    };
+
+    if (existing) {
+      return this.update('body_workout_entries', existing.id, payload);
+    }
+    return this.create('body_workout_entries', payload);
   }
 
   // --- QUERY SPECIFICHE PER PREVENTIVI ---
@@ -512,6 +607,9 @@ class Store {
       brain_facts: [],
       brain_nodes: [],
       brain_edges: [],
+      body_exercise_columns: [],
+      body_daily_logs: [],
+      body_workout_entries: [],
     };
     this.save();
   }

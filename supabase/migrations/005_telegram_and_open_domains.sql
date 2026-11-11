@@ -80,3 +80,4 @@ CREATE POLICY "Users can manage own telegram_bot_subscribers"
     TO authenticated
     USING ((select auth.uid()) = user_id)
     WITH CHECK ((select auth.uid()) = user_id);
+

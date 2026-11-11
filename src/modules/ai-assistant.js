@@ -36,7 +36,7 @@ const SOURCE_LABELS = {
 };
 
 export function openAiModal(options = {}) {
-  const { preselectedClientId = null, onSaved = null, autoProcessQueue = false } = options;
+  const { preselectedClientId = null, onSaved = null, autoProcessQueue = false, initialText = '', autoRun = false } = options;
   const activeModule = options.activeModule || (typeof window !== 'undefined' ? window.appRouter?.currentRoute : null) || null;
   const clients = store.getAll('clients');
   let devilsMode = readDevilsPref();
@@ -52,14 +52,14 @@ export function openAiModal(options = {}) {
           <div class="ai-header-title">
             <div id="ai-modal-orb-canvas" title="Nucleo Cognitivo 3D Interattivo (Three.js)" style="width: 44px; height: 44px; border-radius: 10px; background: #18181b; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(99,102,241,0.35);"></div>
             <div>
-              <div class="modal-title" style="color: #ffffff; letter-spacing: -0.02em;">Assistente Operativo IA & Second Brain</div>
+              <div class="modal-title" style="color: #ffffff; letter-spacing: -0.02em;">Assistente</div>
               <div id="ai-modal-subtitle" style="font-size: 11px; color: #a1a1aa;">
-                ${preselectedName ? `Contesto cliente attivo: <strong>${preselectedName}</strong>` : 'Analizza testo, foto o note vocali ed estrae To-do, Eventi, Body Log e Fatti Mem0'}
+                ${preselectedName ? `Cliente: <strong>${escapeHtml(preselectedName)}</strong>` : 'Scrivi in libertà: capisco da solo se è un impegno, una spesa, un allenamento o un appunto'}
               </div>
             </div>
           </div>
           <div class="persona-toggle" role="group" aria-label="Persona dell'assistente">
-            <button type="button" class="persona-btn" data-persona="constructive" aria-pressed="${!devilsMode}">🤝 Assistente Costruttivo</button>
+            <button type="button" class="persona-btn" data-persona="constructive" aria-pressed="${!devilsMode}">🤝 Aiuto</button>
             <button type="button" class="persona-btn devil" data-persona="devil" aria-pressed="${devilsMode}">😈 Avvocato del Diavolo</button>
           </div>
           <button type="button" class="btn btn-sm btn-secondary" id="close-ai-modal-btn" aria-label="Chiudi" style="background: rgba(255,255,255,0.1); color: #fff; border: none;">✕</button>
@@ -71,7 +71,7 @@ export function openAiModal(options = {}) {
             <div id="ai-persona-banner"></div>
             <div id="ai-queue-host"></div>
             <div class="form-group">
-              <label class="form-label">Descrivi cosa devi fare o fornisci note su clienti/lavori:</label>
+              <label class="form-label">Cosa vuoi dirmi?</label>
               <textarea
                 id="ai-text-input"
                 class="form-textarea"
@@ -101,25 +101,24 @@ export function openAiModal(options = {}) {
               </div>
             </div>
 
-            <!-- Opzione Second Brain Tri-Layer -->
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding: 10px 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--radius);">
-              <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #166534; cursor: pointer;">
-                <input type="checkbox" id="ai-save-to-brain" checked />
-                🧠 Memorizza anche nel Second Brain (estrae Fatti Atomici Mem0 & Knowledge Graph)
-              </label>
-              <select id="ai-brain-domain" class="form-select" style="max-width: 190px; padding: 4px 8px; font-size: 12px;">
-                ${Object.entries(BRAIN_DOMAINS).map(([k, v]) => `
-                  <option value="${k}" ${(preselectedClientId && k === 'client') ? 'selected' : ''}>${v.icon} ${v.label}</option>
-                `).join('')}
-              </select>
-            </div>
+            <details class="ai-options">
+              <summary>Opzioni</summary>
+              <div class="ai-options-body">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="ai-save-to-brain" checked />
+                  Ricorda anche i fatti nel Second Brain
+                </label>
+                <select id="ai-brain-domain" class="form-select" style="max-width: 190px;" aria-label="Area del Second Brain">
+                  ${Object.entries(BRAIN_DOMAINS).map(([k, v]) => `
+                    <option value="${k}" ${(preselectedClientId && k === 'client') ? 'selected' : ''}>${v.icon} ${v.label}</option>
+                  `).join('')}
+                </select>
+              </div>
+            </details>
 
             <div style="display: flex; justify-content: flex-end; gap: 8px;">
-              <button type="button" id="ai-save-brain-only-btn" class="btn btn-secondary">
-                🧠 Salva Solo nel Second Brain
-              </button>
               <button type="button" id="ai-process-btn" class="btn btn-ai" style="padding: 10px 20px;">
-                ⚡ Elabora con l'IA
+                Elabora
               </button>
             </div>
           </div>
@@ -140,7 +139,8 @@ export function openAiModal(options = {}) {
               </div>
             </div>
 
- <!-- Elaborazione batch della Coda Appunti -->
+            <div id="ai-engine-banner"></div>
+            <!-- Elaborazione batch della Coda Appunti -->
             <div id="ai-batch-banner" style="display: none;"></div>
 
             <!-- Critica Avvocato del Diavolo -->
@@ -235,7 +235,6 @@ export function openAiModal(options = {}) {
   const defaultPlaceholder = textInput?.placeholder || '';
   const defaultSubtitle = div.querySelector('#ai-modal-subtitle')?.innerHTML || '';
   const processBtn = div.querySelector('#ai-process-btn');
-  const brainOnlyBtn = div.querySelector('#ai-save-brain-only-btn');
 
   // --- Persona: Assistente Costruttivo | Avvocato del Diavolo ---
   function applyPersonaUi() {
@@ -259,8 +258,7 @@ export function openAiModal(options = {}) {
         ? 'Es: Preventivo e-commerce a 3000€ da consegnare in 10 giorni, revisioni a volontà. Conviene? / Ho venduto 3 articoli su Vinted questa settimana, ne vale la pena?'
         : defaultPlaceholder;
     }
-    if (processBtn) processBtn.innerHTML = devilsMode ? '😈 Metti alla prova' : '⚡ Elabora con l\'IA';
-    if (brainOnlyBtn) brainOnlyBtn.style.display = devilsMode ? 'none' : '';
+    if (processBtn) processBtn.innerHTML = devilsMode ? '😈 Metti alla prova' : 'Elabora';
     const subtitleEl = div.querySelector('#ai-modal-subtitle');
     if (subtitleEl) {
       subtitleEl.innerHTML = devilsMode ? 'Socio critico: contesta le tue assunzioni con numeri reali' : defaultSubtitle;
@@ -376,28 +374,6 @@ export function openAiModal(options = {}) {
     reader.readAsDataURL(file);
   });
 
-  // Salva direttamente solo nel Second Brain
-  div.querySelector('#ai-save-brain-only-btn')?.addEventListener('click', async () => {
-    const text = textInput.value.trim();
-    if (!text) {
-      alert('Inserisci una nota o un appunto da salvare nel Second Brain.');
-      return;
-    }
-    const domain = div.querySelector('#ai-brain-domain')?.value || 'work';
-    try {
-      const res = await ingestKnowledge({
-        text,
-        domain,
-        sourceType: 'ai_chat',
-      });
-      alert(`Nota memorizzata nel Second Brain!\nFatti estratti/aggiornati: ${res.facts.length}\nRelazioni grafo: ${res.edges.length}`);
-      div.remove();
-      if (onSaved) onSaved();
-    } catch (err) {
-      alert('Errore salvataggio Second Brain: ' + err.message);
-    }
-  });
-
   // Elaborazione Richiesta
   div.querySelector('#ai-process-btn').addEventListener('click', async () => {
     const text = textInput.value.trim();
@@ -473,6 +449,7 @@ export function openAiModal(options = {}) {
     div.querySelector('#ai-todos-count').textContent = (data.todos || []).length;
     div.querySelector('#ai-appts-count').textContent = (data.appointments || []).length;
 
+    renderEngineBanner(data);
     renderBatchBanner(data);
     renderCritique(data.critique);
     renderFinanceProposals(data.finance_transactions || []);
@@ -737,6 +714,19 @@ export function openAiModal(options = {}) {
           </div>
         </div>
       `).join('');
+    }
+  }
+
+  function renderEngineBanner(data) {
+    const el = div.querySelector('#ai-engine-banner');
+    if (!el) return;
+    if (data.engine === 'local') {
+      const why = data.aiError?.message ? escapeHtml(data.aiError.message) : 'L\'IA non è configurata.';
+      el.innerHTML = `<div class="notice warn"><strong>⚠️ Non ha lavorato l'IA</strong> — ${why}<br>Ho usato regole semplici: controlla bene le proposte. Per sistemare l'IA vai in Impostazioni → Verifica IA.</div>`;
+    } else if (data.engine === 'ai') {
+      el.innerHTML = '<div class="notice ok">✅ Letto dall\'IA</div>';
+    } else {
+      el.innerHTML = '';
     }
   }
 
@@ -1143,7 +1133,12 @@ export function openAiModal(options = {}) {
     mouseDownOnBackdrop = false;
   });
 
+  if (initialText && textInput) textInput.value = initialText;
   if (autoProcessQueue) {
     setTimeout(() => runQueueBatch(), 0);
+  } else if (autoRun && initialText) {
+    setTimeout(() => processBtn?.click(), 0);
+  } else {
+    setTimeout(() => textInput?.focus(), 50);
   }
 }

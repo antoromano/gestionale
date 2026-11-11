@@ -134,6 +134,7 @@ export function openImportModal(parentContainer, router, onRestored) {
       };
       // I backup precedenti contengono `expenses`: confluiscono nel ledger finance_transactions
       store.migrateLegacyExpenses();
+      store.allowBulkDelete();
       store.save();
       alert('Ripristino completato con successo!');
       closeModal();

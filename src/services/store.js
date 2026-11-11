@@ -122,6 +122,8 @@ class Store {
     this.entityHooks = new Set();
     this._batchDepth = 0;
     this._dirty = false;
+    this.saveHooks = new Set();
+    this.bulkDeleteAllowedUntil = 0;
     this.init();
   }
 
@@ -214,13 +216,33 @@ class Store {
       return;
     }
     try {
-      if (typeof localStorage === 'undefined') return;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.data.settings));
-      this.notify();
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.data.settings));
+        this.notify();
+      }
     } catch (err) {
       console.error('Errore nel salvataggio del database locale:', err);
     }
+    // Hook di sincronizzazione (cloud): indipendente dalla disponibilità di localStorage
+    for (const hook of this.saveHooks) {
+      try {
+        hook();
+      } catch (err) {
+        console.warn('Errore nel hook di salvataggio:', err);
+      }
+    }
+  }
+
+  /** Registra una funzione chiamata dopo ogni salvataggio (usata dalla sincronizzazione cloud). */
+  onSave(hook) {
+    this.saveHooks.add(hook);
+    return () => this.saveHooks.delete(hook);
+  }
+
+  /** Autorizza per qualche secondo le eliminazioni di massa (reset, svuota cestino, ripristino backup). */
+  allowBulkDelete(ms = 15000) {
+    this.bulkDeleteAllowedUntil = Date.now() + ms;
   }
 
   subscribe(listener) {
@@ -380,6 +402,7 @@ class Store {
   }
 
   emptyTrash() {
+    this.allowBulkDelete();
     for (const col of TRASHABLE_COLLECTIONS) {
       if (this.data[col]) {
         this.data[col] = this.data[col].filter(item => !item.is_deleted);
@@ -752,21 +775,9 @@ class Store {
     return count;
   }
 
-  // --- CARICAMENTO DATI DIMOSTRATIVI FACOLTATIVI ---
-  loadSampleData(sampleJson) {
-    if (!sampleJson) return false;
-    this.data = {
-      ...this.data,
-      ...sampleJson,
-      settings: { ...this.data.settings, ...(sampleJson.settings || {}) },
-    };
-    this.migrateLegacyExpenses();
-    this.save();
-    return true;
-  }
-
   // --- RESET TOTALE DATI ---
   clearAll() {
+    this.allowBulkDelete();
     this.data = createEmptyData();
     this.save();
   }

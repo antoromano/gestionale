@@ -146,6 +146,26 @@ Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header del
 
 ---
 
+## ☁️ Come funziona oggi (cloud-first, utente unico)
+
+- **Una sola fonte di verità: Supabase.** Il browser tiene solo una copia veloce (cache) e sincronizza da solo (`src/services/cloud.js`): invia le modifiche, riceve quelle fatte altrove (es. da Telegram) in tempo reale, e mostra sempre lo stato in alto ("Sincronizzato", "Offline", "Errore").
+- **Accesso con email e password** (Supabase Auth). Il database accetta **un solo utente**: il primo che si registra; ogni altro tentativo viene rifiutato (migrazione `007`/`008`). I dati senza proprietario vengono adottati dal primo utente.
+- **Telegram** (`supabase/functions/telegram-webhook`): risponde "✅" solo se il database ha confermato la scrittura; ogni salvataggio ha il tasto *Annulla*. Risponde solo al proprietario (`TELEGRAM_ALLOWED_USER_ID`).
+- **IA**: la chiave sta solo sul server (secret `GEMINI_API_KEY`). Il modello viene scoperto dinamicamente (niente nomi di modello scritti nel codice). Se l'IA non risponde l'app lo dice chiaramente, non finge. *Impostazioni → Verifica IA* controlla tutto.
+- **Second Brain**: prima mostra "Cosa ho capito" e salva solo dopo la tua conferma.
+- **Inbox unico** in alto: scrivi qualsiasi cosa e Invio; "Da parte" mette la nota in coda per elaborarla in blocco con una sola richiesta IA.
+
+### Segreti da impostare su Supabase (Edge Functions → Secrets)
+`GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, `TELEGRAM_WEBHOOK_SECRET` (opzionale). Mai nel codice o in chat.
+
+### Edge Functions: codice condiviso
+`src/services/gemini-core.js` è la copia canonica; `node scripts/sync-edge-shared.mjs` la copia nelle funzioni. Un test verifica che non ci siano differenze.
+
+### Hosting gratuito
+Supabase Free + Vercel Hobby bastano (uso personale). Attenzione: Supabase Free mette in pausa il progetto dopo ~1 settimana di inattività; Vercel Hobby è per uso non commerciale.
+
+---
+
 ## 🗄️ Guida alla Configurazione di Supabase
 
 ### 1. Creazione Progetto
@@ -160,7 +180,7 @@ Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header del
 2. Copia ed esegui il file `supabase/migrations/002_storage_buckets.sql` per configurare i bucket:
    - `quote-attachments`: Privato, max 5 MB, supporta JPEG, PNG, WebP. Accesso concesso solo all'utente proprietario.
    - `business-assets`: Per loghi aziendali.
-3. Esegui in ordine le migration successive (`003`…`006`). La `006_finances_and_queue.sql` crea `finance_transactions`, `trading_items` (con `net_profit` e `roi_percent` come colonne generate) e `ai_note_queue`, tutte con RLS.
+3. Esegui in ordine le migration successive (`003`…`008`; `007` e `008` introducono sincronizzazione, blocco a utente unico e realtime). La `006_finances_and_queue.sql` crea `finance_transactions`, `trading_items` (con `net_profit` e `roi_percent` come colonne generate) e `ai_note_queue`, tutte con RLS.
 
 ### 3. Distribuzione Edge Functions
 Assicurati di avere la CLI di Supabase installata (`supabase login`):
@@ -183,11 +203,7 @@ supabase secrets set NOTION_DATABASE_ID="tuo_notion_db_id"
 
 ## 🤖 Integrazione Google Gemini (Edge Function o Diretta)
 
-L'assistente è accessibile tramite il pulsante **✨ Assistente IA** posizionato:
-1. Nella **Dashboard** (modulo rapido di inserimento to-do).
-2. Nella sezione **To-do**.
-3. Nella **Scheda Cliente** (con contesto del cliente già preimpostato).
-4. Nella barra di navigazione desktop e mobile.
+L'assistente si apre dalla casella **Inbox** in alto (Invio), dal tasto **+** sul telefono e dalla Scheda Cliente (con il cliente già impostato). Con **Avvocato del Diavolo** attivo non crea nulla: critica con i tuoi numeri.
 
 ### Funzionalità supportate:
 - **Testo Libero**: Riconosce richieste multiple complesse (es. *"Devo attivare un abbonamento per lavorare, fare le foto prodotti per Cliente A e preparare i contenuti per Cliente B"*).
@@ -235,7 +251,7 @@ Durante la compilazione del preventivo:
 
 ## 📦 Backup & Ripristino per Nuove Installazioni
 
-Dalla barra laterale o dalle Impostazioni:
+Dal menu laterale (*Copia di sicurezza* / *Ripristina*):
 1. **Esporta Backup**: Genera un file `.json` contenente impostazioni, clienti, preventivi, voci, immagini base64, to-do, appuntamenti e spese.
 2. **Ripristina Backup**: Consente di caricare il file su una nuova installazione completamente vuota, ricostruendo l'intero database senza dipendere da vecchi URL o bucket remoti.
 

@@ -3,13 +3,22 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { store } from './store.js';
+import { SUPABASE_URL, SUPABASE_KEY, IS_TEST_ENV } from './config.js';
 
 let supabaseInstance = null;
+let injectedClient = null;
+
+/** Solo per i test: sostituisce il client Supabase con uno finto. */
+export function setSupabaseForTests(client) {
+  injectedClient = client;
+}
 
 export function getSupabase() {
+  if (injectedClient) return injectedClient;
+
   const settings = store.getSettings();
-  const url = settings.supabase_url || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) || '';
-  const anonKey = settings.supabase_anon_key || (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) || '';
+  const url = settings.supabase_url || (IS_TEST_ENV ? '' : SUPABASE_URL);
+  const anonKey = settings.supabase_anon_key || (IS_TEST_ENV ? '' : SUPABASE_KEY);
 
   if (!url || !anonKey) {
     return null;

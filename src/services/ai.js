@@ -3,7 +3,7 @@
 // + Profili di Prompt Specializzati (Agent Personas), modalità "Avvocato del Diavolo" e Ingestion Batch.
 
 import { store } from './store.js';
-import { getSupabase } from './supabase.js';
+import { aiGenerate, isAiConfigured } from './ai-client.js';
 import { querySecondBrain } from './brain.js';
 import { DEFAULT_BODY_COLUMNS, parseWorkoutNotation } from '../utils/body-parser.js';
 import {
@@ -296,7 +296,7 @@ export async function processAiPrompt({
     timezone: settings.timezone || 'Europe/Rome',
   });
   const normalizeOptions = { profile: payload.profile, devilsEvidence: payload.devilsEvidence };
-  const finish = (res, source) => {
+  const finish = (res, source, aiError = null) => {
     // L'Avvocato del Diavolo critica, non propone: scarta qualunque azione operativa restituita dal modello
     const base = payload.profile === 'devils_advocate'
       ? { ...res, clients_to_create: [], todos: [], appointments: [], body_log: null, finance_transactions: [], trading_items: [] }
@@ -306,79 +306,41 @@ export async function processAiPrompt({
       brainContext,
       profile: payload.profile,
       source,
+      engine: source === 'local_heuristic' ? 'local' : 'ai',
+      // Se l'IA non ha risposto il motivo è SEMPRE riportato (l'interfaccia lo mostra): niente fallback silenzioso
+      aiError: aiError ? { code: aiError.code || 'unavailable', message: aiError.message } : null,
       aiCalls: source === 'local_heuristic' ? 0 : 1,
     };
   };
-  const isUsable = (d) => d && (d.todos || d.appointments || d.body_log || d.finance_transactions || d.trading_items || d.critique);
 
-  const supabase = getSupabase();
-
-  // 1. Prova prima con Supabase Edge Function se disponibile
-  if (supabase) {
-    try {
-      const { devilsEvidence: _local, ...edgeBody } = payload;
-      const { data, error } = await supabase.functions.invoke('gemini-assistant', {
-        body: edgeBody,
-      });
-      if (!error && isUsable(data)) {
-        return finish(normalizeAiResponse(data, existingClients, preselectedClientId, normalizeOptions), 'edge_function');
-      }
-    } catch (err) {
-      console.warn('Edge function fallita o non raggiungibile:', err);
+  const localFallback = (aiError) => {
+    if (payload.profile === 'devils_advocate') return finish(localDevilsAdvocate(payload), 'local_heuristic', aiError);
+    if (payload.profile === 'ingestion_batch' && Array.isArray(payload.batchNotes) && payload.batchNotes.length > 0) {
+      return finish(localBatchParser(payload.batchNotes, existingClients, preselectedClientId), 'local_heuristic', aiError);
     }
+    return finish(localHeuristicParser(prompt, existingClients, preselectedClientId), 'local_heuristic', aiError);
+  };
+
+  if (!isAiConfigured()) {
+    return localFallback({ code: 'not_configured', message: 'IA non configurata: uso regole semplici (zero token).' });
   }
 
-  // 2. Prova con chiamata diretta a Gemini se l'utente ha inserito la chiave nelle Impostazioni
-  if (settings.gemini_api_key) {
-    try {
-      const res = await callDirectGemini(settings.gemini_api_key, payload, existingClients, preselectedClientId, normalizeOptions);
-      return finish(res, 'gemini_direct');
-    } catch (err) {
-      console.warn('Chiamata diretta Gemini fallita:', err);
-    }
-  }
+  try {
+    const parts = [{ text: `Richiesta utente:\n${payload.prompt || ''}` }];
+    if (payload.imageBase64) parts.push({ inline_data: { mime_type: payload.imageMimeType || 'image/jpeg', data: payload.imageBase64 } });
+    if (payload.audioBase64) parts.push({ inline_data: { mime_type: payload.audioMimeType || 'audio/webm', data: payload.audioBase64 } });
 
-  // 3. Fallback Euristico Locale (zero token): consente di usare l'app anche offline o prima di inserire le credenziali API
-  if (payload.profile === 'devils_advocate') {
-    return finish(localDevilsAdvocate(payload), 'local_heuristic');
-  }
-  if (payload.profile === 'ingestion_batch' && Array.isArray(payload.batchNotes) && payload.batchNotes.length > 0) {
-    return finish(localBatchParser(payload.batchNotes, existingClients, preselectedClientId), 'local_heuristic');
-  }
-  return finish(localHeuristicParser(prompt, existingClients, preselectedClientId), 'local_heuristic');
-}
-
-async function callDirectGemini(apiKey, payload, existingClients, preselectedClientId, normalizeOptions = {}) {
-  const systemInstruction = composeSystemInstruction(payload);
-
-  const parts = [{ text: `${systemInstruction}\n\nRichiesta utente:\n${payload.prompt}` }];
-
-  if (payload.imageBase64) {
-    parts.push({
-      inline_data: {
-        mime_type: payload.imageMimeType || 'image/jpeg',
-        data: payload.imageBase64,
-      },
+    const { data, via } = await aiGenerate({
+      system: composeSystemInstruction(payload),
+      parts,
+      temperature: payload.temperature ?? 0.1,
+      json: true,
     });
+    return finish(normalizeAiResponse(data, existingClients, preselectedClientId, normalizeOptions), via === 'edge' ? 'edge_function' : 'gemini_direct');
+  } catch (err) {
+    console.warn('IA non disponibile:', err.code, err.message);
+    return localFallback(err);
   }
-
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts }],
-      generationConfig: { temperature: payload.temperature ?? 0.1, responseMimeType: 'application/json' },
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Errore Gemini API: ${res.statusText}`);
-  }
-
-  const resData = await res.json();
-  const text = resData.candidates?.[0]?.content?.parts?.[0]?.text;
-  const parsed = JSON.parse(text);
-  return normalizeAiResponse(parsed, existingClients, preselectedClientId, normalizeOptions);
 }
 
 // ---------------------------------------------------------------------------

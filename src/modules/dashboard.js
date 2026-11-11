@@ -3,7 +3,6 @@
 
 import { store } from '../services/store.js';
 import { formatDate, formatDateTime, formatCurrency } from '../utils/formatters.js';
-import { openAiModal } from './ai-assistant.js';
 import { icon } from '../utils/icons.js';
 import { attachSpringTiltCards } from '../utils/three-scenes.js';
 
@@ -39,12 +38,8 @@ export function renderDashboard(container, router) {
       <div style="font-weight: 600; font-size: 12.5px; color: var(--text-muted); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
         <span style="display: inline-flex; align-items: center; gap: 6px; color: var(--text-main);">
           ${icon('todos', 15)}
-          <span>Command Bar • Aggiungi To-do al volo</span>
+          <span>Aggiungi una cosa da fare</span>
         </span>
-        <button id="dashboard-trigger-ai-btn" class="btn btn-sm btn-ai" title="Assistente IA">
-          ${icon('sparkles', 14)}
-          <span>Chiedi all'IA</span>
-        </button>
       </div>
 
       <form id="quick-todo-form">
@@ -105,7 +100,7 @@ export function renderDashboard(container, router) {
         <div class="card-header">
           <div class="card-title" style="display: flex; align-items: center; gap: 8px;">
             ${icon('todos', 16)}
-            <span>To-do Aperti</span>
+            <span>Da fare</span>
             <span class="badge badge-gray mono">${openTodos.length}</span>
           </div>
           <div style="display: flex; gap: 6px;">
@@ -153,7 +148,7 @@ export function renderDashboard(container, router) {
         <div class="card-header">
           <div class="card-title" style="display: flex; align-items: center; gap: 8px;">
             ${icon('calendar', 16)}
-            <span>Agenda, Deploy & Scadenze</span>
+            <span>Prossimi appuntamenti</span>
           </div>
           <button class="btn btn-sm btn-secondary" id="go-to-calendar-btn">Vedi Agenda</button>
         </div>
@@ -192,7 +187,7 @@ export function renderDashboard(container, router) {
       <div class="card-header">
         <div class="card-title" style="display: flex; align-items: center; gap: 8px;">
           ${icon('quotes', 16)}
-          <span>Lavori & Preventivi Attivi</span>
+          <span>Lavori in corso</span>
           <span class="badge badge-gray mono">${openJobs.length}</span>
         </div>
         <button class="btn btn-sm btn-secondary" id="go-to-quotes-btn">Vedi Preventivi</button>
@@ -290,16 +285,6 @@ export function renderDashboard(container, router) {
       renderDashboard(container, router);
     });
   });
-
-  // AI Modal Trigger
-  const aiBtn = container.querySelector('#dashboard-trigger-ai-btn');
-  if (aiBtn) {
-    aiBtn.addEventListener('click', () => {
-      openAiModal({
-        onSaved: () => renderDashboard(container, router),
-      });
-    });
-  }
 
   // Navigazione pulsanti
   const calBtn = container.querySelector('#go-to-calendar-btn');

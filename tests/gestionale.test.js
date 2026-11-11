@@ -15,9 +15,13 @@ import {
 } from '../src/utils/formatters.js';
 import { buildQuotePdfFileName } from '../src/services/pdf.js';
 import { store } from '../src/services/store.js';
+import { clearModelCache } from '../src/services/gemini-core.js';
 import { processAiPrompt } from '../src/services/ai.js';
 import {
   ingestKnowledge,
+  proposeKnowledge,
+  commitKnowledge,
+  extractKnowledgeLocally,
   upsertFact,
   upsertGraphRelationship,
   querySecondBrain,
@@ -1123,6 +1127,9 @@ describe('15. Coda Appunti & Ingestion Batching', () => {
     store.addQueuedNote('devo richiamare Marco domani per il preventivo');
 
     const fetchMock = vi.fn(async (url) => {
+      if (/\/v1beta\/models(\?|$)/.test(String(url))) {
+        return { ok: true, json: async () => ({ models: [{ name: 'models/gemini-flash-latest', supportedGenerationMethods: ['generateContent'] }] }) };
+      }
       if (String(url).includes(':generateContent')) {
         return {
           ok: true,
@@ -1144,7 +1151,8 @@ describe('15. Coda Appunti & Ingestion Batching', () => {
 
     const generateCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes(':generateContent'));
     expect(generateCalls).toHaveLength(1); // 3 note -> 1 sola chiamata
-    const sentText = JSON.parse(generateCalls[0][1].body).contents[0].parts[0].text;
+    const sentBody = JSON.parse(generateCalls[0][1].body);
+    const sentText = `${sentBody.systemInstruction.parts[0].text}\n${sentBody.contents[0].parts[0].text}`;
     expect(sentText).toContain('Pull Up 20(10,10,10,10)');
     expect(sentText).toContain('ho speso 45€ di benzina');
     expect(sentText).toContain('richiamare Marco');
@@ -1284,6 +1292,9 @@ describe('16. Profili Specializzati & modalità "Avvocato del Diavolo"', () => {
   it('3. processAiPrompt in modalità Avvocato del Diavolo: invia la persona al modello e non crea to-do/eventi', async () => {
     store.updateSettings({ gemini_api_key: 'TEST_KEY' });
     const fetchMock = vi.fn(async (url) => {
+      if (/\/v1beta\/models(\?|$)/.test(String(url))) {
+        return { ok: true, json: async () => ({ models: [{ name: 'models/gemini-flash-latest', supportedGenerationMethods: ['generateContent'] }] }) };
+      }
       if (String(url).includes(':generateContent')) {
         return {
           ok: true,
@@ -1301,13 +1312,30 @@ describe('16. Profili Specializzati & modalità "Avvocato del Diavolo"', () => {
     const res = await processAiPrompt({ prompt: 'E-commerce a 3000€ in 10 giorni, revisioni illimitate', devilsAdvocate: true, activeModule: 'quotes' });
     const calls = fetchMock.mock.calls.filter(([url]) => String(url).includes(':generateContent'));
     expect(calls).toHaveLength(1);
-    expect(JSON.parse(calls[0][1].body).contents[0].parts[0].text).toContain('AVVOCATO DEL DIAVOLO');
+    expect(JSON.parse(calls[0][1].body).systemInstruction.parts[0].text).toContain('AVVOCATO DEL DIAVOLO');
     expect(JSON.parse(calls[0][1].body).generationConfig.temperature).toBe(AI_PROFILES.devils_advocate.temperature);
 
     expect(res.profile).toBe('devils_advocate');
     expect(res.todos).toHaveLength(0); // anche se il modello ne restituisce, la persona critica non crea azioni
     expect(res.critique.verdict).toBe('Non accettare così');
     expect(res.critique.buffer_percent).toEqual({ min: 25, max: 35 });
+  });
+
+  it('3b. se l\'IA è configurata ma NON risponde (modello sparito) il risultato lo dichiara: engine "local" + motivo, mai fallback silenzioso', async () => {
+    store.updateSettings({ gemini_api_key: 'TEST_KEY' });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404, text: async () => JSON.stringify({ error: { message: 'models/gemini-1.5-flash is not found' } }) })));
+
+    const res = await processAiPrompt({ prompt: 'Devo richiamare Marco domani' });
+    expect(res.engine).toBe('local');
+    expect(res.source).toBe('local_heuristic');
+    expect(res.aiError).toMatchObject({ code: 'model_unavailable' });
+    expect(res.aiError.message).toMatch(/non è più disponibile/);
+    expect(res.todos.length).toBeGreaterThan(0); // il lavoro con regole semplici resta utile, ma dichiarato
+
+    // senza alcuna configurazione: dichiarato come "non configurata"
+    store.updateSettings({ gemini_api_key: '' });
+    const none = await processAiPrompt({ prompt: 'Devo richiamare Marco domani' });
+    expect(none.aiError).toMatchObject({ code: 'not_configured' });
   });
 
   it('4. senza IA la critica è a zero token: ore implicite vs ore produttive, buffer 25-35% e nessuna proposta operativa', async () => {
@@ -1319,5 +1347,76 @@ describe('16. Profili Specializzati & modalità "Avvocato del Diavolo"', () => {
     expect(res.critique.risks.join(' ')).toMatch(/scadenza irrealistica/i);
     expect(res.critique.buffer_percent).toEqual({ min: 25, max: 35 });
     expect(res.critique.recommendations.join(' ')).toMatch(/revisioni/i);
+  });
+});
+
+
+describe('20. Second Brain: proponi → anteprima → conferma, con motore sempre dichiarato', () => {
+  const NOTE = 'Ho sentito Marco Rossi di TechCorp: vuole rifare il sito in Next.js, budget circa 4000 euro, consegna entro fine mese. Ricordarsi di proporre un canone di manutenzione. Marco preferisce essere contattato via WhatsApp il pomeriggio.';
+  beforeEach(() => {
+    store.clearAll();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('1. con l\'IA la nota su Marco/TechCorp diventa fatti corretti PRIMA di salvare; salvando nulla va perso né attribuito alla persona sbagliata', async () => {
+    clearModelCache(); // la cache dei modelli è per chiave: i test precedenti usavano la stessa chiave finta
+    store.updateSettings({ gemini_api_key: 'TEST_KEY' });
+    const aiFacts = {
+      summary: 'Marco Rossi (TechCorp) vuole rifare il sito',
+      tags: ['techcorp'],
+      facts: [
+        { subject: 'TechCorp', fact_key: 'stack_richiesto', fact_value: 'Next.js', category: 'client_info' },
+        { subject: 'TechCorp', fact_key: 'budget', fact_value: '4000 euro', category: 'metric' },
+        { subject: 'TechCorp', fact_key: 'scadenza', fact_value: 'fine mese', category: 'status' },
+        { subject: 'Marco Rossi', fact_key: 'canale_preferito', fact_value: 'WhatsApp, pomeriggio', category: 'preference' },
+      ],
+      nodes: [{ label: 'TechCorp', node_type: 'client', properties: {} }, { label: 'Marco Rossi', node_type: 'person', properties: {} }, { label: 'Next.js', node_type: 'technology', properties: {} }],
+      edges: [{ source_label: 'TechCorp', target_label: 'Next.js', relation_type: 'USA_TECNOLOGIA', evidence: 'vuole rifare il sito in Next.js' }],
+    };
+    const fetchMock = vi.fn(async (url) => {
+      const u = String(url);
+      if (/\/v1beta\/models(\?|$)/.test(u)) {
+        return { ok: true, json: async () => ({ models: [{ name: 'models/gemini-flash-latest', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-embedding-001', supportedGenerationMethods: ['embedContent'] }] }) };
+      }
+      if (u.includes(':generateContent')) return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(aiFacts) }] } }] }) };
+      if (u.includes(':embedContent')) return { ok: true, json: async () => ({ embedding: { values: new Array(768).fill(0.05) } }) };
+      return { ok: false, status: 404, text: async () => '' };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const proposal = await proposeKnowledge({ text: NOTE, domain: 'client' });
+    expect(proposal.engine).toBe('ai');
+    expect(proposal.error).toBeUndefined();
+    expect(proposal.facts.map(f => `${f.subject}.${f.fact_key}=${f.fact_value}`)).toEqual([
+      'TechCorp.stack_richiesto=Next.js', 'TechCorp.budget=4000 euro', 'TechCorp.scadenza=fine mese', 'Marco Rossi.canale_preferito=WhatsApp, pomeriggio',
+    ]);
+    expect(store.getAll('brain_memories')).toHaveLength(0); // l'anteprima non salva nulla
+
+    // L'utente corregge un fatto e deseleziona l'arco del grafo, poi conferma
+    const edited = { ...proposal, facts: proposal.facts.map(f => (f.fact_key === 'budget' ? { ...f, fact_value: '4500 euro' } : f)), edges: [] };
+    const res = await commitKnowledge({ text: NOTE, domain: 'client' }, edited);
+    expect(res.engine).toBe('ai');
+    expect(res.facts).toHaveLength(4);
+    expect(store.getActiveFacts('TechCorp').find(f => f.fact_key === 'budget').fact_value).toBe('4500 euro');
+    expect(store.getActiveFacts('Antonio')).toHaveLength(0); // niente fatti attribuiti a "Antonio" per sbaglio
+    expect(res.memory.embedding_source).toBe('gemini');
+    expect(res.memory.embedding).toHaveLength(768);
+  });
+
+  it('2. senza IA o con IA guasta la proposta è "local" + motivo (poco affidabile); l\'estrattore semplice non inventa più chiavi dalle frasi', async () => {
+    const none = await proposeKnowledge({ text: NOTE, domain: 'client' });
+    expect(none.engine).toBe('local');
+    expect(none.error.code).toBe('not_configured');
+    expect(none.facts.some(f => /entito|ho_sentito|marco_rossi_di/i.test(f.fact_key))).toBe(false);
+    expect(extractKnowledgeLocally('Stack: Next.js\nCanone: 300 euro', 'client').facts.length).toBeGreaterThan(0); // le vere etichette "chiave: valore" funzionano ancora
+
+    store.updateSettings({ gemini_api_key: 'TEST_KEY' });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: 'quota' } }) })));
+    const broken = await proposeKnowledge({ text: NOTE, domain: 'client' });
+    expect(broken.engine).toBe('local');
+    expect(broken.error.code).toBe('quota');
+    expect(broken.error.message).toMatch(/limite di richieste/);
   });
 });

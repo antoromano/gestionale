@@ -1,7 +1,9 @@
 // src/services/brain.js
 // Motore Cognitivo Tri-Layer Ibrido (Livello 1: Semantic Memory pgvector | Livello 2: Mem0 Atomic Facts | Livello 3: Relational Knowledge Graph)
-// Funzionante con Supabase PostgreSQL + Gemini (text-embedding-004 & gemini-1.5-flash) e con Fallback Euristico Locale Deterministico
+// Persistenza: sincronizzazione cloud generica (cloud.js). IA: ai-client.js (modelli scoperti da Google, errori espliciti).
+// L'estrattore euristico locale resta disponibile ma è SEMPRE dichiarato come tale (engine: 'local').
 
+import { aiGenerate, aiEmbed, isAiConfigured } from './ai-client.js';
 import { store } from './store.js';
 import { getSupabase } from './supabase.js';
 import {
@@ -121,34 +123,23 @@ export function cosineSimilarity(vecA, vecB) {
 }
 
 /**
- * Calcola l'embedding tramite Gemini text-embedding-004 (768 dim) o fallback locale
+ * Embedding a 768 dimensioni. `source` dichiara chi l'ha calcolato ('gemini' | 'local'): vettori di sorgenti diverse
+ * NON sono confrontabili, quindi la ricerca usa solo quelli della stessa sorgente.
  */
-export async function generateEmbedding(text) {
-  const settings = store.getSettings();
-  if (settings.gemini_api_key && typeof fetch !== 'undefined') {
+export async function generateEmbeddingDetailed(text) {
+  if (isAiConfigured()) {
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${settings.gemini_api_key}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'models/text-embedding-004',
-            content: { parts: [{ text }] },
-          }),
-        }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data?.embedding?.values) && data.embedding.values.length === 768) {
-          return data.embedding.values;
-        }
-      }
+      const { values, model } = await aiEmbed(text);
+      return { values, source: 'gemini', model };
     } catch (err) {
-      console.warn('Fallback embedding locale (Gemini embedding non raggiungibile):', err.message);
+      return { values: computeLocalEmbedding(text), source: 'local', error: { code: err.code, message: err.message } };
     }
   }
-  return computeLocalEmbedding(text);
+  return { values: computeLocalEmbedding(text), source: 'local' };
+}
+
+export async function generateEmbedding(text) {
+  return (await generateEmbeddingDetailed(text)).values;
 }
 
 /**
@@ -246,7 +237,6 @@ export function upsertFact({
       confidence: Math.max(Number(existingActive.confidence) || 1.0, Number(confidence) || 1.0),
       source_memory_id: source_memory_id || existingActive.source_memory_id || null,
     });
-    syncFactToSupabase(updated);
     return { ...updated, action: 'unchanged', previousFact: null };
   }
 
@@ -272,10 +262,7 @@ export function upsertFact({
       valid_to: nowIso,
       superseded_by: newFact.id,
     });
-    syncFactToSupabase(supersededOld);
   }
-
-  syncFactToSupabase(newFact);
 
   return {
     ...newFact,
@@ -295,7 +282,6 @@ export function invalidateFact(factId) {
     is_active: false,
     valid_to: nowIso,
   });
-  syncFactToSupabase(updated);
   return updated;
 }
 
@@ -320,7 +306,6 @@ export function upsertNode({ label, node_type = null, properties = {} }) {
     const updated = store.update('brain_nodes', existing.id, {
       properties: mergedProps,
     });
-    syncNodeToSupabase(updated);
     return updated;
   }
 
@@ -329,7 +314,6 @@ export function upsertNode({ label, node_type = null, properties = {} }) {
     node_type: resolvedType,
     properties: properties || {},
   });
-  syncNodeToSupabase(created);
   return created;
 }
 
@@ -385,7 +369,6 @@ export function upsertGraphRelationship({
       weight: newWeight,
       evidence: evidence || existingEdge.evidence || '',
     });
-    syncEdgeToSupabase(updatedEdge);
     return {
       edge: updatedEdge,
       sourceNode,
@@ -401,7 +384,6 @@ export function upsertGraphRelationship({
     weight: 1.0,
     evidence: evidence || '',
   });
-  syncEdgeToSupabase(newEdge);
 
   return {
     edge: newEdge,
@@ -582,6 +564,8 @@ export function extractKnowledgeLocally(text = '', domain = 'work', title = '') 
     const rawKey = kvMatch[1].trim();
     const rawVal = kvMatch[2].trim();
     if (/^(http|https|es|esempio|nota|nb|ore)$/i.test(rawKey)) continue;
+    // Una "chiave" è un'etichetta breve ("stack", "canone mensile"), non l'inizio di una frase ("Ho sentito Marco Rossi di TechCorp")
+    if (rawKey.split(/\s+/).length > 3 || /^(ho|ha|hanno|abbiamo|oggi|ieri|domani|ricordarsi|ricordare)\b/i.test(rawKey)) continue;
     const normKey = rawKey.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
     if (normKey.length >= 3 && normKey.length <= 32 && rawVal.length >= 1) {
       const alreadyExists = facts.some(f => f.fact_key === normKey);
@@ -682,9 +666,9 @@ export function extractKnowledgeLocally(text = '', domain = 'work', title = '') 
 }
 
 /**
- * Estrazione strutturata con Gemini (quando gemini_api_key è presente)
+ * Estrazione strutturata con l'IA. Lancia GeminiError se l'IA non è disponibile (il chiamante lo mostra all'utente).
  */
-async function extractKnowledgeWithGemini(apiKey, text, domain, title) {
+async function extractKnowledgeWithAi(text, domain, title) {
   const prompt = `
 Sei il motore cognitivo di un Second Brain Tri-Layer (Semantic Memory, Mem0 Atomic Facts, Knowledge Graph).
 Analizza il seguente contenuto (Dominio: ${domain}, Titolo: "${title || ''}"):
@@ -721,75 +705,57 @@ Estrai un oggetto JSON valido con questa esatta struttura:
   ]
 }
 `;
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
-      }),
-    }
-  );
-
-  if (!res.ok) throw new Error(`Gemini extraction error: ${res.status}`);
-  const data = await res.json();
-  const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  return JSON.parse(rawJson);
+  const { data, model } = await aiGenerate({ parts: [{ text: prompt }], temperature: 0.1, json: true });
+  return { ...data, model };
 }
 
 /**
- * LIVELLO 1 + 2 + 3 — Ingestione Completa nel Second Brain
+ * PASSO 1 — Propone cosa estrarre da una nota SENZA salvare nulla (per l'anteprima).
+ * @returns {{engine:'ai'|'local', model?:string, error?:{code:string,message:string}, summary:string, tags:string[], facts:Array, nodes:Array, edges:Array}}
+ *   engine 'local' = regole semplici (poco affidabili): l'interfaccia deve dirlo, con il motivo in `error`.
  */
-export async function ingestKnowledge({
-  text,
-  content,
-  title = '',
-  domain = 'work',
-  sourceType = 'manual',
-  sourceId = null,
-  tags = [],
-}) {
+export async function proposeKnowledge({ text, content, title = '', domain = 'work' }) {
   const rawText = (text || content || '').trim();
-  if (!rawText) {
-    throw new Error('Il contenuto da memorizzare nel Second Brain non può essere vuoto.');
-  }
+  if (!rawText) throw new Error('Il contenuto da memorizzare nel Second Brain non può essere vuoto.');
+  const resolvedDomain = domain && String(domain).trim().length > 0 ? String(domain).trim() : 'work';
+  const local = extractKnowledgeLocally(rawText, resolvedDomain, title);
 
+  if (!isAiConfigured()) {
+    return { engine: 'local', error: { code: 'not_configured', message: 'IA non configurata: uso regole semplici, poco affidabili.' }, ...local };
+  }
+  try {
+    const ai = await extractKnowledgeWithAi(rawText, resolvedDomain, title);
+    return {
+      engine: 'ai',
+      model: ai.model,
+      summary: ai.summary || local.summary,
+      tags: Array.from(new Set([...(ai.tags || []), ...(local.tags || [])].map(t => String(t).trim()).filter(Boolean))),
+      facts: Array.isArray(ai.facts) ? ai.facts : [],
+      nodes: Array.isArray(ai.nodes) ? ai.nodes : [],
+      edges: Array.isArray(ai.edges) ? ai.edges : [],
+    };
+  } catch (err) {
+    return { engine: 'local', error: { code: err.code || 'unavailable', message: err.message }, ...local };
+  }
+}
+
+/**
+ * PASSO 2 — Salva memoria (Livello 1), fatti Mem0 (Livello 2) e grafo (Livello 3) a partire da una proposta
+ * (eventualmente corretta dall'utente). `proposal.facts/nodes/edges` possono essere vuoti: si salva solo la memoria.
+ */
+export async function commitKnowledge({ text, content, title = '', domain = 'work', sourceType = 'manual', sourceId = null, tags = [] }, proposal) {
+  const rawText = (text || content || '').trim();
+  if (!rawText) throw new Error('Il contenuto da memorizzare nel Second Brain non può essere vuoto.');
   const resolvedDomain = domain && String(domain).trim().length > 0 ? String(domain).trim() : 'work';
   const validSources = ['manual', 'ai_chat', 'client_event', 'todo', 'body_log', 'telegram'];
   const resolvedSource = validSources.includes(sourceType) ? sourceType : 'manual';
 
-  // 1. Estrazione euristica locale (sempre eseguita come base deterministica)
-  const localExtracted = extractKnowledgeLocally(rawText, resolvedDomain, title);
-
-  // 2. Se Gemini API Key è configurata, arricchisce l'estrazione con il modello LLM
-  let aiExtracted = null;
-  const settings = store.getSettings();
-  if (settings.gemini_api_key && typeof fetch !== 'undefined') {
-    try {
-      aiExtracted = await extractKnowledgeWithGemini(settings.gemini_api_key, rawText, resolvedDomain, title);
-    } catch (err) {
-      console.warn('Uso estrattore euristico locale per Second Brain:', err.message);
-    }
-  }
-
-  const mergedTags = Array.from(
-    new Set([
-      ...(Array.isArray(tags) ? tags : []),
-      ...(localExtracted.tags || []),
-      ...(aiExtracted?.tags || []),
-    ].map(t => String(t).trim()).filter(Boolean))
-  );
-
-  const summary = aiExtracted?.summary || localExtracted.summary || rawText.slice(0, 120);
+  const mergedTags = Array.from(new Set([...(Array.isArray(tags) ? tags : []), ...(proposal.tags || [])].map(t => String(t).trim()).filter(Boolean)));
+  const summary = proposal.summary || rawText.slice(0, 120);
   const autoTitle = title.trim() || summary.slice(0, 65);
 
-  // 3. Calcola embedding (768 dim)
-  const embedding = await generateEmbedding(`${autoTitle}\n${rawText}`);
+  const emb = await generateEmbeddingDetailed(`${autoTitle}\n${rawText}`);
 
-  // 4. Salva Livello 1: brain_memories
   const memory = store.create('brain_memories', {
     title: autoTitle,
     content: rawText,
@@ -798,65 +764,39 @@ export async function ingestKnowledge({
     source_type: resolvedSource,
     source_id: sourceId ? String(sourceId) : null,
     tags: mergedTags,
-    embedding,
+    embedding: emb.values,
+    embedding_source: emb.source,
+    extraction_engine: proposal.engine || 'local',
   });
 
-  syncMemoryToSupabase(memory);
-
-  // 5. Upsert Livello 2: brain_facts (Mem0)
-  const candidateFacts = [...(aiExtracted?.facts || []), ...(localExtracted.facts || [])];
   const seenFactKeys = new Set();
   const upsertedFacts = [];
-
-  for (const f of candidateFacts) {
+  for (const f of proposal.facts || []) {
     if (!f || !f.subject || !f.fact_key || f.fact_value === undefined) continue;
     const dedupId = `${String(f.subject).toLowerCase()}::${String(f.fact_key).toLowerCase()}`;
     if (seenFactKeys.has(dedupId)) continue;
     seenFactKeys.add(dedupId);
-
-    const res = upsertFact({
-      subject: f.subject,
-      fact_key: f.fact_key,
-      fact_value: f.fact_value,
-      category: f.category || 'status',
-      source_memory_id: memory.id,
-    });
+    const res = upsertFact({ subject: f.subject, fact_key: f.fact_key, fact_value: f.fact_value, category: f.category || 'status', source_memory_id: memory.id });
     if (res) upsertedFacts.push(res);
   }
 
-  // 6. Upsert Livello 3: brain_nodes e brain_edges (Knowledge Graph)
-  const candidateNodes = [...(aiExtracted?.nodes || []), ...(localExtracted.nodes || [])];
   const upsertedNodesMap = new Map();
-  for (const n of candidateNodes) {
+  for (const n of proposal.nodes || []) {
     if (!n || !n.label) continue;
-    const node = upsertNode({
-      label: n.label,
-      node_type: n.node_type,
-      properties: n.properties || {},
-    });
+    const node = upsertNode({ label: n.label, node_type: n.node_type, properties: n.properties || {} });
     if (node) upsertedNodesMap.set(node.id, node);
   }
 
-  const candidateEdges = [...(aiExtracted?.edges || []), ...(localExtracted.edges || [])];
   const upsertedEdges = [];
   const seenEdges = new Set();
-
-  for (const e of candidateEdges) {
+  for (const e of proposal.edges || []) {
     const srcLabel = e.source_label || e.source;
     const tgtLabel = e.target_label || e.target;
     if (!srcLabel || !tgtLabel) continue;
     const edgeKey = `${String(srcLabel).toLowerCase()}->${String(e.relation_type || 'CORRELATO_A').toUpperCase()}->${String(tgtLabel).toLowerCase()}`;
     if (seenEdges.has(edgeKey)) continue;
     seenEdges.add(edgeKey);
-
-    const relRes = upsertGraphRelationship({
-      source: srcLabel,
-      target: tgtLabel,
-      source_type: e.source_type,
-      target_type: e.target_type,
-      relation_type: e.relation_type || 'CORRELATO_A',
-      evidence: e.evidence || summary,
-    });
+    const relRes = upsertGraphRelationship({ source: srcLabel, target: tgtLabel, source_type: e.source_type, target_type: e.target_type, relation_type: e.relation_type || 'CORRELATO_A', evidence: e.evidence || summary });
     if (relRes) {
       upsertedEdges.push(relRes.edge);
       upsertedNodesMap.set(relRes.sourceNode.id, relRes.sourceNode);
@@ -869,7 +809,18 @@ export async function ingestKnowledge({
     facts: upsertedFacts,
     nodes: Array.from(upsertedNodesMap.values()),
     edges: upsertedEdges,
+    engine: proposal.engine || 'local',
+    aiError: proposal.error || null,
   };
+}
+
+/**
+ * Ingestione in un solo passo (uso programmatico: flussi automatici e test). L'interfaccia usa propose + commit
+ * per mostrare l'anteprima. `engine` e `aiError` dichiarano sempre quale motore ha lavorato.
+ */
+export async function ingestKnowledge(args) {
+  const proposal = await proposeKnowledge(args);
+  return commitKnowledge(args, proposal);
 }
 
 /**
@@ -953,7 +904,8 @@ export async function querySecondBrain(queryText = '', options = {}) {
   }
 
   // --- LIVELLO 1: Ricerca Ibrida Memorie Semantiche (Cosine Similarity + BM25-like Lexical Ranking) ---
-  const queryEmbedding = cleanQuery ? await generateEmbedding(cleanQuery) : null;
+  const queryEmb = cleanQuery ? await generateEmbeddingDetailed(cleanQuery) : null;
+  const queryEmbedding = queryEmb ? queryEmb.values : null;
   const candidateMemories = store.getMemoriesByDomain(domain);
 
   const scoredMemories = candidateMemories.map(mem => {
@@ -975,7 +927,8 @@ export async function querySecondBrain(queryText = '', options = {}) {
     }
 
     let vectorScore = 0;
-    if (queryEmbedding && Array.isArray(mem.embedding)) {
+    // Si confrontano solo vettori della stessa sorgente (Gemini con Gemini, locale con locale)
+    if (queryEmbedding && Array.isArray(mem.embedding) && (mem.embedding_source || 'local') === queryEmb.source) {
       vectorScore = Math.max(0, cosineSimilarity(queryEmbedding, mem.embedding));
     }
 
@@ -1390,87 +1343,3 @@ store.onEntityChange((collection, _action, item) => {
     syncBodyWorkoutEntryToBrain(item);
   }
 });
-
-// --- SINCRONIZZAZIONE NON-BLOCCANTE VERSO SUPABASE ---
-async function syncMemoryToSupabase(memory) {
-  const supabase = getSupabase();
-  if (!supabase || !memory) return;
-  try {
-    await supabase.from('brain_memories').upsert({
-      id: memory.id,
-      title: memory.title,
-      content: memory.content,
-      summary: memory.summary,
-      domain: memory.domain,
-      source_type: memory.source_type,
-      source_id: memory.source_id,
-      tags: memory.tags,
-      embedding: memory.embedding,
-      is_deleted: Boolean(memory.is_deleted),
-      created_at: memory.created_at,
-      updated_at: memory.updated_at,
-    });
-  } catch (err) {
-    console.warn('Sync Supabase brain_memories ignorato (modalità local-first):', err.message);
-  }
-}
-
-async function syncFactToSupabase(fact) {
-  const supabase = getSupabase();
-  if (!supabase || !fact) return;
-  try {
-    await supabase.from('brain_facts').upsert({
-      id: fact.id,
-      subject: fact.subject,
-      fact_key: fact.fact_key,
-      fact_value: fact.fact_value,
-      category: fact.category,
-      confidence: fact.confidence,
-      is_active: fact.is_active,
-      superseded_by: fact.superseded_by,
-      valid_from: fact.valid_from,
-      valid_to: fact.valid_to,
-      source_memory_id: fact.source_memory_id,
-      created_at: fact.created_at,
-      updated_at: fact.updated_at,
-    });
-  } catch (err) {
-    console.warn('Sync Supabase brain_facts ignorato (modalità local-first):', err.message);
-  }
-}
-
-async function syncNodeToSupabase(node) {
-  const supabase = getSupabase();
-  if (!supabase || !node) return;
-  try {
-    await supabase.from('brain_nodes').upsert({
-      id: node.id,
-      label: node.label,
-      node_type: node.node_type,
-      properties: node.properties,
-      created_at: node.created_at,
-      updated_at: node.updated_at,
-    });
-  } catch (err) {
-    console.warn('Sync Supabase brain_nodes ignorato (modalità local-first):', err.message);
-  }
-}
-
-async function syncEdgeToSupabase(edge) {
-  const supabase = getSupabase();
-  if (!supabase || !edge) return;
-  try {
-    await supabase.from('brain_edges').upsert({
-      id: edge.id,
-      source_node_id: edge.source_node_id,
-      target_node_id: edge.target_node_id,
-      relation_type: edge.relation_type,
-      weight: edge.weight,
-      evidence: edge.evidence,
-      created_at: edge.created_at,
-    });
-  } catch (err) {
-    console.warn('Sync Supabase brain_edges ignorato (modalità local-first):', err.message);
-  }
-}
-

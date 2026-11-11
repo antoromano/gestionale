@@ -2,6 +2,7 @@
 // Gestione Impostazioni: Personalizzazione Brand, Dati Fiscali, Condizioni, Integrazioni e Dati Demo
 
 import { store, defaultSettings } from '../services/store.js';
+import { aiDiagnose } from '../services/ai-client.js';
 import {
   getTelegramIntegrationStatus,
   sendTelegramTestMessage,
@@ -197,11 +198,19 @@ export function renderSettings(container, router) {
           </div>
 
           <div class="form-group">
-            <label class="form-label">Chiave API Google Gemini (per elaborazione testo, foto e note vocali)</label>
-            <input type="password" id="set-gemini-key" class="form-input" value="${settings.gemini_api_key || ''}" placeholder="AIzaSy..." />
-            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-              Inserisci la chiave API per chiamate dirette o configura GEMINI_API_KEY su Supabase Edge Functions. Se lasciata vuota, il sistema utilizza il motore euristico locale.
+            <label class="form-label">Intelligenza artificiale (Gemini)</label>
+            <div class="muted" style="margin-bottom: 8px;">
+              La chiave vera sta al sicuro sul server (Supabase), non qui. Premi il pulsante per controllare se l'IA risponde davvero.
             </div>
+            <button type="button" id="ai-diagnose-btn" class="btn btn-secondary">Verifica IA</button>
+            <div id="ai-diagnose-result" style="margin-top: 10px;"></div>
+            <details class="ai-options" style="margin-top: 12px;">
+              <summary>Uso una mia chiave personale (solo su questo dispositivo)</summary>
+              <div class="ai-options-body" style="display: block;">
+                <input type="password" id="set-gemini-key" class="form-input" value="${settings.gemini_api_key || ''}" placeholder="AIzaSy..." autocomplete="off" />
+                <div class="muted" style="margin-top: 4px;">Serve solo se la chiave sul server non c'è. Non viene mai sincronizzata né salvata nel cloud.</div>
+              </div>
+            </details>
           </div>
 
           <div class="form-group" style="max-width: 280px;">
@@ -356,12 +365,9 @@ export function renderSettings(container, router) {
           <div class="card-title">Gestione Dati & Manutenzione Installazione</div>
         </div>
         <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 14px;">
-          Questa installazione è completamente indipendente. Puoi caricare dati dimostrativi facoltativi per testare tutte le funzionalità oppure azzerare il database per avviare una nuova attività.
+          I dati sono nel tuo cloud (Supabase) e si sincronizzano su tutti i dispositivi. Puoi azzerare tutto per ricominciare da zero: l'operazione cancella i dati anche dal cloud.
         </p>
         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-          <button type="button" id="load-sample-data-btn" class="btn btn-secondary">
-            📂 Carica Dati Dimostrativi di Esempio
-          </button>
           <button type="button" id="reset-all-data-btn" class="btn btn-danger">
             ⚠️ Azzera Completamente Tutti i Dati
           </button>
@@ -466,27 +472,13 @@ export function renderSettings(container, router) {
     }
   });
 
-  // Carica Dati Demo
-  container.querySelector('#load-sample-data-btn').addEventListener('click', async () => {
-    if (confirm('Vuoi caricare il set completo di dati dimostrativi di esempio?')) {
-      try {
-        const res = await fetch('/sample-data.json');
-        const sampleJson = await res.json();
-        store.loadSampleData(sampleJson);
-        alert('Dati dimostrativi caricati con successo!');
-        router.navigate('dashboard');
-      } catch (err) {
-        alert('Impossibile caricare i dati demo: ' + err.message);
-      }
-    }
-  });
-
   // Reset Totale Dati
   container.querySelector('#reset-all-data-btn').addEventListener('click', () => {
     if (confirm('ATTENZIONE: Questa azione cancellerà permanentemente TUTTI i dati inseriti (clienti, preventivi, to-do, spese, impostazioni). Procedere?')) {
       store.clearAll();
-      alert('Installazione ripristinata allo stato iniziale vergine.');
-      location.reload();
+      // lascia al sincronizzatore il tempo di inviare le eliminazioni al cloud prima di ricaricare
+      setTimeout(() => location.reload(), 2500);
+      alert('Installazione azzerata. La pagina si ricaricherà tra pochi secondi.');
     }
   });
 
@@ -526,6 +518,26 @@ export function renderSettings(container, router) {
         fb.style.color = 'var(--danger)';
         fb.textContent = err.message;
       }
+    }
+  });
+
+  container.querySelector('#ai-diagnose-btn')?.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    const out = container.querySelector('#ai-diagnose-result');
+    btn.disabled = true;
+    out.innerHTML = '<div class="muted">Controllo in corso…</div>';
+    try {
+      // Se l'utente ha appena scritto una chiave personale, la usa subito per il test
+      const typed = container.querySelector('#set-gemini-key')?.value.trim();
+      if (typed && typed !== store.getSettings().gemini_api_key) store.updateSettings({ gemini_api_key: typed });
+      const r = await aiDiagnose();
+      out.innerHTML = r.ok && r.probeOk !== false
+        ? `<div class="notice ok">✅ L'IA funziona (${r.via === 'edge' ? 'dal server' : 'chiave personale'}). Modello di testo: <strong>${r.generateModel || '?'}</strong>${r.embedModel ? `; ricerca per significato: <strong>${r.embedModel}</strong>` : ''}.</div>`
+        : `<div class="notice err">❌ L'IA non funziona: ${(r.message || 'risposta non valida').replace(/</g, '&lt;')}</div>`;
+    } catch (err) {
+      out.innerHTML = `<div class="notice err">❌ ${String(err.message || err).replace(/</g, '&lt;')}</div>`;
+    } finally {
+      btn.disabled = false;
     }
   });
 

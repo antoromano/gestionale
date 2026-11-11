@@ -6,14 +6,15 @@ import { store } from '../services/store.js';
 import {
   BRAIN_DOMAINS,
   NODE_TYPE_META,
-  ingestKnowledge,
+  proposeKnowledge,
+  commitKnowledge,
   upsertFact,
   invalidateFact,
   upsertGraphRelationship,
   querySecondBrain,
   syncClientToBrain,
 } from '../services/brain.js';
-import { formatDateTime } from '../utils/formatters.js';
+import { formatDateTime, escapeHtml } from '../utils/formatters.js';
 import { icon } from '../utils/icons.js';
 import { mountForceGraph3D, mountNeuralOrb3D, attachSpringTiltCards } from '../utils/three-scenes.js';
 
@@ -148,7 +149,7 @@ export function renderBrain(container, router) {
               ${icon('mic', 13)} <span>Dettatura Vocale</span>
             </button>
             <button type="submit" id="brain-ingest-submit-btn" class="btn btn-ai">
-              ${icon('sparkles', 14)} <span>Memorizza & Estrai Conoscenza</span>
+              ${icon('sparkles', 14)} <span>Memorizza</span>
             </button>
           </div>
         </form>
@@ -249,11 +250,79 @@ export function renderBrain(container, router) {
 /**
  * Renderizza il banner di feedback immediato dopo l'ingestione
  */
+/**
+ * Anteprima prima del salvataggio: l'utente vede cosa è stato capito e conferma (o toglie voci) PRIMA che si salvi.
+ * Dice sempre quale motore ha lavorato: se l'IA non ha funzionato lo scrive in chiaro.
+ */
+function openBrainPreview({ args, proposal, onSaved }) {
+  const host = document.createElement('div');
+  const facts = proposal.facts || [];
+  const edges = proposal.edges || [];
+  const engineBox = proposal.engine === 'ai'
+    ? `<div class="notice ok">✅ Letto dall'IA${proposal.model ? ` (${escapeHtml(proposal.model)})` : ''}. Controlla e conferma.</div>`
+    : `<div class="notice warn"><strong>⚠️ Non ha lavorato l'IA.</strong> ${escapeHtml(proposal.error?.message || 'Uso regole semplici.')}<br>
+        Le regole semplici trovano pochi dati. Puoi salvare lo stesso il testo come nota, oppure sistemare l'IA in Impostazioni → Verifica IA.</div>`;
+
+  host.innerHTML = `
+    <div class="modal-overlay" id="brain-preview-overlay">
+      <div class="modal-dialog">
+        <div class="modal-header"><div class="modal-title">Cosa ho capito</div>
+          <button type="button" class="btn btn-sm btn-secondary" data-bp-close aria-label="Chiudi">✕</button></div>
+        <div class="modal-body">
+          ${engineBox}
+          <p class="muted" style="margin: 10px 0;">Riassunto: <strong>${escapeHtml(proposal.summary || '—')}</strong></p>
+          <h4 class="section-h">Fatti da ricordare (${facts.length})</h4>
+          ${facts.length === 0 ? '<p class="muted">Nessun fatto trovato. Il testo verrà salvato comunque come nota.</p>' : `
+            <ul class="check-list">
+              ${facts.map((f, i) => `
+                <li><label><input type="checkbox" data-bp-fact="${i}" checked />
+                  <span><strong>${escapeHtml(f.subject)}</strong> · ${escapeHtml(f.fact_key)} = <strong>${escapeHtml(f.fact_value)}</strong></span></label></li>`).join('')}
+            </ul>`}
+          ${edges.length ? `
+            <h4 class="section-h">Collegamenti (${edges.length})</h4>
+            <ul class="check-list">
+              ${edges.map((e, i) => `
+                <li><label><input type="checkbox" data-bp-edge="${i}" checked />
+                  <span>${escapeHtml(e.source_label || e.source)} → ${escapeHtml(e.relation_type || 'collegato a')} → ${escapeHtml(e.target_label || e.target)}</span></label></li>`).join('')}
+            </ul>` : ''}
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bp-close>Annulla, non salvare</button>
+          <button type="button" class="btn btn-primary" data-bp-save>Salva</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(host);
+  const close = () => host.remove();
+  host.querySelectorAll('[data-bp-close]').forEach(b => b.addEventListener('click', close));
+  host.querySelector('[data-bp-save]').addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Salvo…';
+    try {
+      const keepF = new Set([...host.querySelectorAll('[data-bp-fact]:checked')].map(el => Number(el.dataset.bpFact)));
+      const keepE = new Set([...host.querySelectorAll('[data-bp-edge]:checked')].map(el => Number(el.dataset.bpEdge)));
+      const filtered = {
+        ...proposal,
+        facts: facts.filter((_, i) => keepF.has(i)),
+        edges: edges.filter((_, i) => keepE.has(i)),
+      };
+      const res = await commitKnowledge(args, filtered);
+      close();
+      onSaved(res);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Salva';
+      alert('Salvataggio non riuscito: ' + err.message);
+    }
+  });
+}
+
 function renderIngestFeedbackBanner(fb) {
   return `
     <div style="margin-top: 14px; padding: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--radius); font-size: 12px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-        <strong style="color: #166534;">✓ Conoscenza Acquisita nei 3 Livelli Cognitivi</strong>
+        <strong style="color: #166534;">✓ Salvato${fb.engine === 'local' ? ' (senza IA)' : ''}</strong>
         <button type="button" id="close-ingest-fb-btn" style="background: none; border: none; cursor: pointer; color: #166534; font-weight: bold;">✕</button>
       </div>
       <div style="color: #15803d; margin-bottom: 6px;">
@@ -957,24 +1026,29 @@ function bindBrainEvents(container, router) {
       const submitBtn = container.querySelector('#brain-ingest-submit-btn');
       if (submitBtn) {
         submitBtn.disabled = true;
-        submitBtn.textContent = '⏳ Elaborazione Tri-Layer...';
+        submitBtn.textContent = '⏳ Leggo il testo…';
       }
 
       try {
-        const res = await ingestKnowledge({
-          title,
-          text,
-          domain: selectedDomainCapture,
-          sourceType: 'manual',
-          tags,
-        });
-        lastIngestFeedback = res;
-        renderBrain(container, router);
-      } catch (err) {
-        alert('Errore durante il salvataggio nel Second Brain: ' + err.message);
+        const args = { title, text, domain: selectedDomainCapture, sourceType: 'manual', tags };
+        const proposal = await proposeKnowledge(args);
         if (submitBtn) {
           submitBtn.disabled = false;
-          submitBtn.textContent = '⚡ Memorizza & Estrai Conoscenza';
+          submitBtn.textContent = 'Memorizza';
+        }
+        openBrainPreview({
+          args,
+          proposal,
+          onSaved: (res) => {
+            lastIngestFeedback = res;
+            renderBrain(container, router);
+          },
+        });
+      } catch (err) {
+        alert('Non sono riuscito a leggere il testo: ' + err.message);
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Memorizza';
         }
       }
     });

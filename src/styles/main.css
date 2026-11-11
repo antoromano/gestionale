@@ -693,12 +693,18 @@ details.ux-guide-callout .ux-guide-body {
 /* Toast Notifiche */
 #toast-container {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
+  top: calc(var(--header-height) + 12px);
+  right: 20px;
+  max-width: min(380px, calc(100vw - 32px));
   z-index: 200;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  pointer-events: none;
+}
+
+#toast-container .toast {
+  pointer-events: auto;
 }
 
 .toast {
@@ -778,4 +784,281 @@ details.ux-guide-callout .ux-guide-body {
   .mobile-cards-table td:last-child {
     border-bottom: none;
   }
+}
+
+/* =========================================================================
+   FINANZE & CASH FLOW · COMPRAVENDITA · IMPORTATORE · CODA APPUNTI · PERSONA IA
+   ========================================================================= */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.data-table tfoot td {
+  border-top: 1px solid var(--border);
+  background: #fafafa;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Barre di ripartizione categorie */
+.cat-bar {
+  height: 8px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.cat-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f87171, var(--danger));
+  border-radius: 999px;
+}
+
+/* Anteprima Margine Netto & ROI nel modal Compravendita */
+.trade-preview {
+  margin-top: 6px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.trade-preview-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+/* Area drag & drop importatore */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 34px 16px;
+  border: 2px dashed rgba(15, 23, 42, 0.18);
+  border-radius: var(--radius-lg);
+  background: #fafafa;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.dropzone:hover,
+.dropzone:focus-visible,
+.dropzone.dragover {
+  border-color: var(--accent);
+  background: rgba(37, 99, 235, 0.05);
+  color: var(--accent);
+  outline: none;
+}
+
+/* Toggle Persona IA: Assistente Costruttivo | Avvocato del Diavolo */
+.persona-toggle {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 999px;
+}
+.persona-btn {
+  border: none;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.persona-btn:hover { color: #f4f4f5; }
+.persona-btn.active { background: #2563eb; color: #fff; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25); }
+.persona-btn.devil.active { background: #dc2626; color: #fff; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.3); }
+
+.persona-banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  background: #eff6ff;
+  color: #1e40af;
+}
+.persona-banner.devil {
+  border-color: rgba(220, 38, 38, 0.3);
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+/* Critica dell'Avvocato del Diavolo */
+.critique-card {
+  padding: 14px 16px;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-left: 4px solid var(--danger);
+  background: #fff;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+}
+.critique-card h4 { font-size: 13px; margin: 10px 0 4px; }
+.critique-card ul { margin: 0; padding-left: 18px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+
+/* Coda Appunti */
+.queue-box {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.queue-box-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-main);
+  background: #fafafa;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.queue-box-header.static { cursor: default; }
+.queue-box-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 170px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.queue-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 12.5px;
+}
+.queue-time { color: var(--text-muted); font-size: 11px; padding-top: 2px; }
+.queue-note-text { flex: 1; word-break: break-word; }
+.queue-del {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.queue-del:hover { color: var(--danger); }
+.queue-empty,
+.queue-hint { font-size: 11.5px; color: var(--text-muted); }
+
+/* Box flottante Coda Appunti */
+.queue-widget {
+  position: fixed;
+  right: 24px;
+  bottom: 84px;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+.queue-fab {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #09090b;
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  box-shadow: var(--shadow-lg);
+  transition: transform 0.15s ease;
+}
+.queue-fab:hover { transform: translateY(-2px); }
+.queue-fab-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+}
+.queue-panel {
+  width: min(380px, calc(100vw - 32px));
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.queue-panel[hidden] { display: none; }
+.queue-panel .queue-box { margin: 0; border: none; }
+
+@media (max-width: 1023px) {
+  .queue-widget { right: 14px; bottom: calc(76px + var(--safe-bottom)); }
+}
+
+/* Header dell'Assistente IA: titolo flessibile, toggle persona e chiusura non vanno mai a capo male */
+.ai-modal-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+.ai-modal-header .ai-header-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.ai-modal-header #close-ai-modal-btn { order: 2; flex: 0 0 auto; }
+.ai-modal-header .persona-toggle { order: 3; flex: 0 0 auto; max-width: 100%; }
+@media (min-width: 760px) {
+  .ai-modal-header .persona-toggle { order: 2; }
+  .ai-modal-header #close-ai-modal-btn { order: 3; }
+}
+@media (max-width: 480px) {
+  .persona-btn { padding: 6px 9px; font-size: 11.5px; }
+}
+
+/* KPI Finanze compatti su mobile (2 colonne) */
+@media (max-width: 640px) {
+  .fin-kpis { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .fin-kpis .kpi-value { font-size: 18px !important; }
 }

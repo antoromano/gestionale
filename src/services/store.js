@@ -4,6 +4,18 @@
 
 import { generateId } from '../utils/id.js';
 import { DEFAULT_BODY_COLUMNS, parseWorkoutNotation } from '../utils/body-parser.js';
+import {
+  getRecurrenceDates,
+  getRecurrenceStart,
+  isRecurringParent,
+  legacyExpenseToTransaction,
+  localTodayIso,
+  normalizeFrequency,
+  normalizeTradingItem,
+  normalizeTransaction,
+  summarizeFinancials,
+  summarizeTrading,
+} from './finances.js';
 
 const STORAGE_KEY = 'gestionale_store_v1';
 const SETTINGS_KEY = 'gestionale_settings_v1';
@@ -44,6 +56,7 @@ export const defaultSettings = {
   notion_database_id: '',
   notion_sync_last_at: null,
   gemini_api_key: '',
+  dev_hourly_rate: 50,
   business_type: 'software_dev',
   github_token: '',
   supabase_url: '',
@@ -53,33 +66,62 @@ export const defaultSettings = {
   telegram_connected: false,
 };
 
+// Collezioni "alias" retrocompatibili: la vecchia collezione `expenses` è ora una vista su
+// `finance_transactions` filtrata per type = 'expense' (lettura e scrittura passano dal nuovo ledger).
+const COLLECTION_ALIASES = {
+  expenses: {
+    target: 'finance_transactions',
+    filter: item => item.type === 'expense',
+    defaults: { type: 'expense' },
+  },
+};
+
+// Collezioni con elementi cestinabili (Soft Delete) mostrate nella sezione Cestino
+// Collezioni che notificano gli hook di sincronizzazione (Second Brain, coda appunti -> Supabase)
+const ENTITY_HOOK_COLLECTIONS = new Set([
+  'clients', 'todos', 'body_daily_logs', 'body_workout_entries', 'ai_note_queue',
+]);
+
+const TRASHABLE_COLLECTIONS = [
+  'clients', 'quotes', 'todos', 'appointments', 'finance_transactions', 'trading_items',
+  'services_catalog', 'payments', 'brain_memories',
+];
+
+function createEmptyData() {
+  return {
+    settings: { ...defaultSettings },
+    clients: [],
+    quotes: [],
+    quote_items: [],
+    quote_item_images: [],
+    quote_extra_services: [],
+    payments: [],
+    todos: [],
+    appointments: [],
+    finance_transactions: [],
+    trading_items: [],
+    ai_note_queue: [],
+    services_catalog: [],
+    trash: [],
+    brain_memories: [],
+    brain_facts: [],
+    brain_nodes: [],
+    brain_edges: [],
+    body_exercise_columns: [],
+    body_daily_logs: [],
+    body_workout_entries: [],
+    telegram_pending_actions: [],
+    telegram_bot_subscribers: [],
+  };
+}
+
 class Store {
   constructor() {
-    this.data = {
-      settings: { ...defaultSettings },
-      clients: [],
-      quotes: [],
-      quote_items: [],
-      quote_item_images: [],
-      quote_extra_services: [],
-      payments: [],
-      todos: [],
-      appointments: [],
-      expenses: [],
-      services_catalog: [],
-      trash: [],
-      brain_memories: [],
-      brain_facts: [],
-      brain_nodes: [],
-      brain_edges: [],
-      body_exercise_columns: [],
-      body_daily_logs: [],
-      body_workout_entries: [],
-      telegram_pending_actions: [],
-      telegram_bot_subscribers: [],
-    };
+    this.data = createEmptyData();
     this.listeners = new Set();
     this.entityHooks = new Set();
+    this._batchDepth = 0;
+    this._dirty = false;
     this.init();
   }
 
@@ -100,12 +142,77 @@ class Store {
           settings: { ...defaultSettings, ...(parsed.settings || this.data.settings) },
         };
       }
+
+      // Retrocompatibilità: le vecchie `expenses` confluiscono in finance_transactions (type = 'expense')
+      if (this.migrateLegacyExpenses() > 0) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+      }
     } catch (err) {
       console.warn('Errore nel caricamento dei dati locali:', err);
     }
   }
 
+  /**
+   * Sposta le eventuali vecchie spese (data.expenses, es. da localStorage precedente o da un backup)
+   * nel ledger unificato finance_transactions con type = 'expense'. Idempotente: salta gli id già presenti.
+   * @returns {number} numero di spese migrate
+   */
+  migrateLegacyExpenses() {
+    const legacy = this.data.expenses;
+    if (!Array.isArray(legacy)) return 0;
+    if (!Array.isArray(this.data.finance_transactions)) this.data.finance_transactions = [];
+
+    const known = new Set(this.data.finance_transactions.map(t => t.id));
+    const nowIso = new Date().toISOString();
+    let moved = 0;
+    for (const exp of legacy) {
+      if (!exp) continue;
+      const id = exp.id || generateId();
+      if (known.has(id)) continue;
+      this.data.finance_transactions.push({
+        ...legacyExpenseToTransaction(exp),
+        id,
+        is_deleted: Boolean(exp.is_deleted),
+        created_at: exp.created_at || nowIso,
+        updated_at: exp.updated_at || nowIso,
+      });
+      known.add(id);
+      moved++;
+    }
+    delete this.data.expenses;
+    return moved;
+  }
+
+  // Raggruppa più scritture in un unico salvataggio/notifica (import massivi, generazione ricorrenze)
+  runBatch(fn) {
+    this._batchDepth++;
+    try {
+      return fn();
+    } finally {
+      this._batchDepth--;
+      if (this._batchDepth === 0 && this._dirty) {
+        this._dirty = false;
+        this.save();
+      }
+    }
+  }
+
+  // Inserisce N record della stessa collezione con un solo salvataggio
+  createBatch(collection, items = []) {
+    const created = [];
+    this.runBatch(() => {
+      for (const item of items) {
+        created.push(this.create(collection, item));
+      }
+    });
+    return created;
+  }
+
   save() {
+    if (this._batchDepth > 0) {
+      this._dirty = true;
+      return;
+    }
     try {
       if (typeof localStorage === 'undefined') return;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
@@ -158,48 +265,69 @@ class Store {
   }
 
   // --- GENERIC CRUD CON SOFT-DELETE (CESTINO) ---
+  // Risolve un nome di collezione (anche alias legacy come `expenses`) nella collezione reale
+  _resolveCollection(collection) {
+    const alias = COLLECTION_ALIASES[collection];
+    return alias
+      ? { name: alias.target, filter: alias.filter, defaults: alias.defaults }
+      : { name: collection, filter: null, defaults: null };
+  }
+
+  // Campi derivati / normalizzazioni per le collezioni finanziarie (mirror delle colonne SQL)
+  _applyDerivedFields(collection, item) {
+    if (collection === 'finance_transactions') return normalizeTransaction(item);
+    if (collection === 'trading_items') return normalizeTradingItem(item);
+    return item;
+  }
+
   getAll(collection, includeDeleted = false) {
-    const list = this.data[collection] || [];
+    const { name, filter } = this._resolveCollection(collection);
+    let list = this.data[name] || [];
+    if (filter) list = list.filter(filter);
     if (includeDeleted) return list;
     return list.filter(item => !item.is_deleted);
   }
 
   getById(collection, id) {
-    const list = this.data[collection] || [];
-    return list.find(item => item.id === id) || null;
+    const { name, filter } = this._resolveCollection(collection);
+    const list = this.data[name] || [];
+    return list.find(item => item.id === id && (!filter || filter(item))) || null;
   }
 
   create(collection, item) {
+    const { name, defaults } = this._resolveCollection(collection);
+    collection = name;
     if (!this.data[collection]) {
       this.data[collection] = [];
     }
     const newItem = {
       id: item.id || generateId(),
-      ...item,
+      ...this._applyDerivedFields(collection, { ...item, ...(defaults || {}) }),
       is_deleted: false,
       created_at: item.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     this.data[collection].unshift(newItem);
     this.save();
-    if (collection === 'clients' || collection === 'todos' || collection === 'body_daily_logs' || collection === 'body_workout_entries') {
+    if (ENTITY_HOOK_COLLECTIONS.has(collection)) {
       this.emitEntityChange(collection, 'create', newItem);
     }
     return newItem;
   }
 
   update(collection, id, partial) {
+    const { name, filter } = this._resolveCollection(collection);
+    collection = name;
     const list = this.data[collection] || [];
-    const index = list.findIndex(item => item.id === id);
+    const index = list.findIndex(item => item.id === id && (!filter || filter(item)));
     if (index === -1) return null;
 
     list[index] = {
-      ...list[index],
-      ...partial,
+      ...this._applyDerivedFields(collection, { ...list[index], ...partial }),
       updated_at: new Date().toISOString(),
     };
     this.save();
-    if (collection === 'clients' || collection === 'todos' || collection === 'body_daily_logs' || collection === 'body_workout_entries') {
+    if (ENTITY_HOOK_COLLECTIONS.has(collection)) {
       this.emitEntityChange(collection, 'update', list[index]);
     }
     return list[index];
@@ -232,19 +360,17 @@ class Store {
 
   // Eliminazione definitiva
   permanentDelete(collection, id) {
-    if (!this.data[collection]) return false;
-    this.data[collection] = this.data[collection].filter(item => item.id !== id);
+    const { name, filter } = this._resolveCollection(collection);
+    if (!this.data[name]) return false;
+    this.data[name] = this.data[name].filter(item => !(item.id === id && (!filter || filter(item))));
     this.save();
     return true;
   }
 
   // Raccoglie tutti gli elementi attualmente nel cestino
   getAllTrash() {
-    const collections = [
-      'clients', 'quotes', 'todos', 'appointments', 'expenses', 'services_catalog', 'payments', 'brain_memories'
-    ];
     const results = [];
-    for (const col of collections) {
+    for (const col of TRASHABLE_COLLECTIONS) {
       const items = (this.data[col] || []).filter(item => item.is_deleted);
       for (const it of items) {
         results.push({ ...it, collection: col });
@@ -254,10 +380,7 @@ class Store {
   }
 
   emptyTrash() {
-    const collections = [
-      'clients', 'quotes', 'todos', 'appointments', 'expenses', 'services_catalog', 'payments', 'brain_memories'
-    ];
-    for (const col of collections) {
+    for (const col of TRASHABLE_COLLECTIONS) {
       if (this.data[col]) {
         this.data[col] = this.data[col].filter(item => !item.is_deleted);
       }
@@ -523,62 +646,110 @@ class Store {
     };
   }
 
-  // --- GENERATORE SPESE RICORRENTI (IDEMPOTENTE) ---
-  generateRecurringExpenses() {
-    const recurringParents = this.getAll('expenses').filter(e => e.is_recurring && !e.is_suspended && !e.recurrence_parent_id);
-    const today = new Date();
+  // --- GENERATORE TRANSAZIONI RICORRENTI (IDEMPOTENTE, Entrate e Uscite) ---
+  // Per ogni "padre" ricorrente attivo genera le occorrenze successive alla data di inizio fino a oggi
+  // (o alla data di fine). Una coppia (padre, data) già presente — anche se cestinata — non viene mai rigenerata.
+  generateRecurringTransactions(todayIso = localTodayIso()) {
+    const all = this.data.finance_transactions || [];
+    const parents = all.filter(t => isRecurringParent(t) && !t.is_suspended);
+    if (parents.length === 0) return 0;
+
+    const existing = new Set(
+      all.filter(t => t.recurrence_parent_id).map(t => `${t.recurrence_parent_id}|${String(t.date).slice(0, 10)}`),
+    );
     let generatedCount = 0;
 
-    for (const parent of recurringParents) {
-      const startDate = new Date(parent.recurrence_start_date || parent.date);
-      const endDate = parent.recurrence_end_date ? new Date(parent.recurrence_end_date) : null;
-      const freq = parent.recurrence_frequency; // 'weekly', 'monthly', 'annual'
+    this.runBatch(() => {
+      for (const parent of parents) {
+        const start = getRecurrenceStart(parent);
+        const dates = getRecurrenceDates(
+          { start, frequency: parent.recurrence_frequency, end: parent.recurrence_end_date },
+          start,
+          todayIso,
+        ).filter(d => d > start);
 
-      if (isNaN(startDate.getTime())) continue;
-
-      let nextDate = new Date(startDate);
-      // Avanza fino alla prima data successiva a startDate
-      while (nextDate <= today) {
-        if (freq === 'weekly') {
-          nextDate.setDate(nextDate.getDate() + 7);
-        } else if (freq === 'monthly') {
-          // Gestione corretta dei mesi con diverso numero di giorni
-          const targetDay = startDate.getDate();
-          const targetMonth = nextDate.getMonth() + 1;
-          const targetYear = nextDate.getFullYear();
-          nextDate = new Date(targetYear, targetMonth, 1);
-          const maxDays = new Date(targetYear, targetMonth + 1, 0).getDate();
-          nextDate.setDate(Math.min(targetDay, maxDays));
-        } else if (freq === 'annual') {
-          nextDate.setFullYear(nextDate.getFullYear() + 1);
-        } else {
-          break;
-        }
-
-        if (nextDate > today) break;
-        if (endDate && nextDate > endDate) break;
-
-        const dateIso = nextDate.toISOString().split('T')[0];
-        // Verifica idempotenza: esiste già una spesa generata per questo parent in questa data?
-        const alreadyExists = this.data.expenses.some(e => e.recurrence_parent_id === parent.id && e.date === dateIso);
-        if (!alreadyExists) {
-          this.create('expenses', {
+        for (const dateIso of dates) {
+          const key = `${parent.id}|${dateIso}`;
+          if (existing.has(key)) continue;
+          this.create('finance_transactions', {
+            type: parent.type,
             description: `${parent.description} (Ricorrente)`,
             amount: parent.amount,
             category: parent.category,
+            payment_method: parent.payment_method,
             date: dateIso,
             notes: parent.notes || '',
             client_id: parent.client_id,
             quote_id: parent.quote_id,
             is_recurring: true,
-            recurrence_frequency: parent.recurrence_frequency,
+            recurrence_frequency: normalizeFrequency(parent.recurrence_frequency),
             recurrence_parent_id: parent.id,
           });
+          existing.add(key);
           generatedCount++;
         }
       }
-    }
+    });
     return generatedCount;
+  }
+
+  // Alias retrocompatibile del vecchio modulo Spese
+  generateRecurringExpenses(todayIso) {
+    return this.generateRecurringTransactions(todayIso);
+  }
+
+  // --- HELPER FINANZE & COMPRAVENDITA ---
+  /**
+   * Cash Flow del mese: Entrate Totali, Uscite Totali, Cashflow Netto e Previsione Uscite Ricorrenti.
+   * @param {number} month 1-12 (default: mese corrente)
+   * @param {number} year (default: anno corrente)
+   */
+  getFinancialSummary(month, year) {
+    return summarizeFinancials(this.getAll('finance_transactions', true), month, year);
+  }
+
+  /** Capitale in giacenza (in_stock), Utile Totale Realizzato (sold) e ROI medio % della Compravendita. */
+  getTradingStats() {
+    return summarizeTrading(this.getAll('trading_items'));
+  }
+
+  // --- CODA APPUNTI RAPIDI (INGESTION BATCHING) ---
+  /** Note ancora da elaborare, dalla più vecchia alla più recente (ordine di inserimento). */
+  getQueuedNotes() {
+    const queued = this.getAll('ai_note_queue').filter(n => n.status !== 'processed');
+    // create() fa unshift: invertendo si ottiene l'ordine di inserimento; sort stabile per created_at
+    return queued
+      .slice()
+      .reverse()
+      .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  }
+
+  addQueuedNote(text, source = 'web') {
+    const content = String(text || '').trim();
+    if (!content) return null;
+    return this.create('ai_note_queue', {
+      content,
+      source: source === 'telegram' ? 'telegram' : 'web',
+      status: 'queued',
+    });
+  }
+
+  /** Segna come elaborate le note indicate (id singolo o array). @returns {number} note aggiornate */
+  markNotesProcessed(ids) {
+    const list = Array.isArray(ids) ? ids : [ids];
+    const nowIso = new Date().toISOString();
+    let count = 0;
+    this.runBatch(() => {
+      for (const id of list) {
+        if (!id) continue;
+        const note = this.getById('ai_note_queue', id);
+        if (note && note.status !== 'processed') {
+          this.update('ai_note_queue', id, { status: 'processed', processed_at: nowIso });
+          count++;
+        }
+      }
+    });
+    return count;
   }
 
   // --- CARICAMENTO DATI DIMOSTRATIVI FACOLTATIVI ---
@@ -589,33 +760,14 @@ class Store {
       ...sampleJson,
       settings: { ...this.data.settings, ...(sampleJson.settings || {}) },
     };
+    this.migrateLegacyExpenses();
     this.save();
     return true;
   }
 
   // --- RESET TOTALE DATI ---
   clearAll() {
-    this.data = {
-      settings: { ...defaultSettings },
-      clients: [],
-      quotes: [],
-      quote_items: [],
-      quote_item_images: [],
-      quote_extra_services: [],
-      payments: [],
-      todos: [],
-      appointments: [],
-      expenses: [],
-      services_catalog: [],
-      trash: [],
-      brain_memories: [],
-      brain_facts: [],
-      brain_nodes: [],
-      brain_edges: [],
-      body_exercise_columns: [],
-      body_daily_logs: [],
-      body_workout_entries: [],
-    };
+    this.data = createEmptyData();
     this.save();
   }
 }

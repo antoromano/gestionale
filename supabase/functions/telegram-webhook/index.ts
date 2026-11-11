@@ -4,6 +4,8 @@
 // 2. Ingestion Multimodale (Note Vocali OGG, Foto Vision, Testo) tramite Gemini
 // 3. Caso A: Riconoscimento diretto Body & Allenamenti (notazione 20(10,10,10,10), kcal, peso, sonno)
 // 4. Caso B: 4° Livello di Protezione (Human-in-the-Loop) con Inline Keyboard su telegram_pending_actions per nuovi Macro-Domini
+// 5. Coda Appunti: /queue <testo> accoda la nota in ai_note_queue (zero token), /digest le elabora tutte con UNA sola chiamata Gemini
+//    (opzionale: secret GESTIONALE_OWNER_USER_ID = UUID Supabase Auth dell'utente, così RLS mostra le note anche all'app web)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.8";
@@ -413,6 +415,186 @@ function analyzeHeuristicText(text = "") {
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// CODA APPUNTI (/queue, /digest) — specchio server-side di src/services/telegram.js
+// ---------------------------------------------------------------------------
+
+function escapeHtml(text: string): string {
+  return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function parseQueueCommand(text: string): { name: "queue" | "digest"; args: string } | null {
+  const m = String(text || "").trim().match(/^\/(queue|digest)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  if (!m) return null;
+  return { name: m[1].toLowerCase() as "queue" | "digest", args: (m[2] || "").trim() };
+}
+
+const INGESTION_BATCH_PROMPT = `
+Sei un motore di ESTRAZIONE BATCH per "Gestionale". Ricevi N appunti numerati raccolti nell'arco della giornata.
+Elabora TUTTI gli appunti in un'unica risposta (multi-intent), output compatto, ZERO convenevoli, SOLO JSON valido:
+{
+  "summary": "una riga per appunto nel formato 'n → destinazione'",
+  "body_log": { "date": "YYYY-MM-DD", "sleep_hours": null, "body_weight_kg": null, "calories_kcal": null, "protein_g": null, "carbs_g": null, "fat_g": null,
+                "workouts": [{ "exercise_name": "Pull Up|Dips|Push Up|Affondi|Squat / Sissy|Femo|Stacchi|Cardio & Sport", "raw_notation": "es. 20(10,10,10,10)" }] } | null,
+  "finance_transactions": [{ "type": "income|expense", "amount": 0, "description": "", "category": "", "date": "YYYY-MM-DD" }],
+  "trading_items": [{ "title": "", "platform": "Vinted|Subito|eBay|Altro", "purchase_price": 0, "extra_costs": 0, "platform_fees": 0, "sale_price": null, "status": "in_stock|reserved|sold" }],
+  "todos": [{ "title": "" }],
+  "appointments": [{ "title": "" }]
+}
+Regole: importi SEMPRE positivi (il segno lo dà "type"); più pasti nella stessa giornata si SOMMANO in un solo body_log; non inventare dati mancanti.
+`;
+
+async function extractQueueBatch(geminiKey: string, notes: Array<{ content: string }>, todayIso: string) {
+  const numbered = notes.map((n, i) => `[${i + 1}] ${n.content}`).join("\n");
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          role: "user",
+          parts: [{ text: `${INGESTION_BATCH_PROMPT}\nData odierna: ${todayIso}\n\nCODA APPUNTI (${notes.length}):\n${numbered}` }],
+        }],
+        generationConfig: { temperature: 0.05, responseMimeType: "application/json" },
+      }),
+    },
+  );
+  if (!res.ok) throw new Error(`Gemini error ${res.status}`);
+  const data = await res.json();
+  const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+  return JSON.parse(raw.replace(/```json/g, "").replace(/```/g, "").trim());
+}
+
+// deno-lint-ignore no-explicit-any
+async function applyQueueBatch(supabase: any, extraction: any, ownerUserId: string | null, todayIso: string) {
+  const owner = ownerUserId ? { user_id: ownerUserId } : {};
+  const applied = { body: false, workouts: 0, finance: 0, trading: 0, todos: 0, appointments: 0 };
+
+  // Body: upsert del log giornaliero + celle esercizio
+  const bd = extraction?.body_log;
+  if (bd && typeof bd === "object") {
+    const date = String(bd.date || todayIso).slice(0, 10);
+    const daily: Record<string, unknown> = { date, ...owner };
+    for (const key of ["body_weight_kg", "sleep_hours", "calories_kcal", "protein_g", "carbs_g", "fat_g"]) {
+      if (bd[key] != null) daily[key] = bd[key];
+    }
+    const { data: existing } = await supabase.from("body_daily_logs").select("id").eq("date", date).limit(1);
+    let dailyLogId: string | null = existing?.[0]?.id || null;
+    if (dailyLogId) {
+      await supabase.from("body_daily_logs").update({ ...daily, updated_at: new Date().toISOString() }).eq("id", dailyLogId);
+    } else {
+      const { data: inserted } = await supabase.from("body_daily_logs").insert(daily).select().single();
+      dailyLogId = inserted?.id || null;
+    }
+    applied.body = true;
+
+    for (const w of Array.isArray(bd.workouts) ? bd.workouts : []) {
+      if (!w?.exercise_name || !w?.raw_notation) continue;
+      const parsed = parseWorkoutNotationEdge(w.raw_notation);
+      const { data: cols } = await supabase.from("body_exercise_columns").select("id").ilike("name", `%${w.exercise_name}%`).limit(1);
+      const columnId = cols?.[0]?.id;
+      if (!columnId) continue;
+      await supabase.from("body_workout_entries").insert({
+        daily_log_id: dailyLogId, date, column_id: columnId, raw_notation: w.raw_notation,
+        parsed_blocks: parsed.blocks, feeling: "buono", ...owner,
+      });
+      applied.workouts++;
+    }
+  }
+
+  // Finanze: importo sempre positivo, il segno è dato da type
+  const finance = (Array.isArray(extraction?.finance_transactions) ? extraction.finance_transactions : [])
+    .filter((t: any) => (t?.type === "income" || t?.type === "expense") && Number(t?.amount) > 0 && t?.description)
+    .map((t: any) => ({
+      type: t.type, amount: Math.abs(Number(t.amount)), description: String(t.description),
+      category: t.category || "generale", date: String(t.date || todayIso).slice(0, 10), payment_method: "bonifico", ...owner,
+    }));
+  if (finance.length > 0) {
+    const { error } = await supabase.from("finance_transactions").insert(finance);
+    if (!error) applied.finance = finance.length;
+  }
+
+  // Compravendita: net_profit e roi_percent sono colonne GENERATED, non vanno inserite
+  const trading = (Array.isArray(extraction?.trading_items) ? extraction.trading_items : [])
+    .filter((t: any) => t?.title && Number(t?.purchase_price) >= 0)
+    .map((t: any) => ({
+      title: String(t.title), platform: ["Vinted", "Subito", "eBay"].includes(t.platform) ? t.platform : "Altro",
+      purchase_price: Number(t.purchase_price) || 0, extra_costs: Number(t.extra_costs) || 0, platform_fees: Number(t.platform_fees) || 0,
+      sale_price: t.sale_price != null ? Number(t.sale_price) : null,
+      status: ["in_stock", "reserved", "sold"].includes(t.status) ? t.status : (t.sale_price != null ? "sold" : "in_stock"),
+      purchase_date: todayIso, ...owner,
+    }));
+  if (trading.length > 0) {
+    const { error } = await supabase.from("trading_items").insert(trading);
+    if (!error) applied.trading = trading.length;
+  }
+
+  // To-do e appuntamenti vivono nel database locale dell'app: qui vengono solo elencati nella risposta
+  applied.todos = Array.isArray(extraction?.todos) ? extraction.todos.length : 0;
+  applied.appointments = Array.isArray(extraction?.appointments) ? extraction.appointments.length : 0;
+  return applied;
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleQueueCommand(opts: {
+  command: { name: "queue" | "digest"; args: string };
+  supabase: any;
+  geminiKey: string;
+  ownerUserId: string | null;
+  todayIso: string;
+}): Promise<string> {
+  const { command, supabase, geminiKey, ownerUserId, todayIso } = opts;
+  if (!supabase) {
+    return "⚠️ Coda appunti non disponibile: configura SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY.";
+  }
+
+  if (command.name === "queue") {
+    if (!command.args) {
+      return [
+        "📝 Usa <code>/queue &lt;testo&gt;</code> per accodare una nota senza consumare token.",
+        "Esempio: <code>/queue Pull Up 20(10,10,10,10) e ho speso 45€ di benzina</code>",
+        "Quando vuoi elaborarle tutte in una sola chiamata: <code>/digest</code>",
+      ].join("\n");
+    }
+    const row: Record<string, unknown> = { content: command.args, source: "telegram", status: "queued" };
+    if (ownerUserId) row.user_id = ownerUserId;
+    const { error } = await supabase.from("ai_note_queue").insert(row);
+    if (error) return `⚠️ Impossibile accodare la nota: ${escapeHtml(error.message)}`;
+    const { count } = await supabase.from("ai_note_queue").select("id", { count: "exact", head: true }).eq("status", "queued");
+    return `📝 Nota accodata (${count ?? "?"} in coda). Usa /digest per elaborarle tutte insieme.`;
+  }
+
+  // /digest: UNA sola chiamata Gemini per tutte le note in coda
+  const { data: notes, error: notesErr } = await supabase
+    .from("ai_note_queue").select("id, content, created_at").eq("status", "queued").order("created_at", { ascending: true }).limit(100);
+  if (notesErr) return `⚠️ Impossibile leggere la coda: ${escapeHtml(notesErr.message)}`;
+  if (!notes || notes.length === 0) return "📭 La coda appunti è vuota. Aggiungi note con /queue &lt;testo&gt;.";
+  if (!geminiKey) return "⚠️ GEMINI_API_KEY non configurata: l'elaborazione in blocco non è disponibile.";
+
+  try {
+    const extraction = await extractQueueBatch(geminiKey, notes, todayIso);
+    const applied = await applyQueueBatch(supabase, extraction, ownerUserId, todayIso);
+    await supabase
+      .from("ai_note_queue")
+      .update({ status: "processed", processed_at: new Date().toISOString() })
+      .in("id", notes.map((n: { id: string }) => n.id));
+
+    const lines = [`✅ <b>Digest completato</b>: ${notes.length} ${notes.length === 1 ? "nota" : "note"} in 1 chiamata.`];
+    if (applied.body) lines.push(`• 🏋️ Body: log del giorno aggiornato${applied.workouts ? ` (${applied.workouts} esercizi)` : ""}`);
+    if (applied.finance) lines.push(`• 💶 Finanze: ${applied.finance} ${applied.finance === 1 ? "movimento" : "movimenti"}`);
+    if (applied.trading) lines.push(`• 🏷️ Compravendita: ${applied.trading} ${applied.trading === 1 ? "articolo" : "articoli"}`);
+    if (applied.todos) lines.push(`• 📋 ${applied.todos} to-do individuati (da inserire nell'app)`);
+    if (applied.appointments) lines.push(`• 📅 ${applied.appointments} eventi individuati (da inserire nell'app)`);
+    if (extraction?.summary) lines.push("", escapeHtml(String(extraction.summary)).slice(0, 900));
+    return lines.join("\n");
+  } catch (err) {
+    // Le note restano in coda: nessuna perdita di dati
+    return `⚠️ Digest non riuscito (le note restano in coda): ${escapeHtml((err as Error).message || "errore sconosciuto")}`;
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -424,6 +606,7 @@ serve(async (req) => {
     const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    const OWNER_USER_ID = Deno.env.get("GESTIONALE_OWNER_USER_ID") || null;
 
     const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
       ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -684,6 +867,25 @@ serve(async (req) => {
         },
         { onConflict: "chat_id" }
       );
+    }
+
+    // Comandi Coda Appunti: /queue <testo> (accoda, zero token) e /digest (elabora tutto in 1 chiamata)
+    const queueCommand = parseQueueCommand(msg.text || "");
+    if (queueCommand) {
+      const replyText = await handleQueueCommand({
+        command: queueCommand,
+        supabase,
+        geminiKey: GEMINI_API_KEY,
+        ownerUserId: OWNER_USER_ID,
+        todayIso: new Date().toISOString().split("T")[0],
+      });
+      if (TELEGRAM_BOT_TOKEN && chatId) {
+        await sendTelegramMessage(TELEGRAM_BOT_TOKEN, chatId, replyText);
+      }
+      return new Response(JSON.stringify({ ok: true, intent: queueCommand.name, reply: replyText }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Estrazione contenuto multimodale (Testo, Audio OGG o Foto JPEG)

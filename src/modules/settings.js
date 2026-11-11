@@ -204,6 +204,14 @@ export function renderSettings(container, router) {
             </div>
           </div>
 
+          <div class="form-group" style="max-width: 280px;">
+            <label class="form-label">Tariffa oraria sviluppo (€/h) — usata dall'Avvocato del Diavolo</label>
+            <input type="number" id="set-dev-hourly-rate" class="form-input" min="1" step="1" value="${settings.dev_hourly_rate || 50}" />
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+              Serve a confrontare il profitto orario reale delle rivendite e le ore implicite dei preventivi con la tua tariffa.
+            </div>
+          </div>
+
           <div class="form-row">
             <div class="form-group" style="flex: 2;">
               <label class="form-label">Supabase URL Progetto (Opzionale)</label>
@@ -429,6 +437,7 @@ export function renderSettings(container, router) {
       vat_percent: parseFloat(container.querySelector('#set-vat-percent').value) || 0,
       quote_default_conditions: container.querySelector('#set-default-conditions').value.trim(),
       gemini_api_key: container.querySelector('#set-gemini-key').value.trim(),
+      dev_hourly_rate: parseFloat(container.querySelector('#set-dev-hourly-rate').value) || 50,
       supabase_url: container.querySelector('#set-supabase-url').value.trim(),
       supabase_anon_key: container.querySelector('#set-supabase-key').value.trim(),
       google_calendar_connected: container.querySelector('#set-gcal-connected').checked,

@@ -15,7 +15,10 @@ Software gestionale web moderno, reattivo, installabile come **PWA (Progressive 
 - **Duplice Generazione PDF Integrata**: Versione **Stampa** (sfondo bianco, inchiostro risparmiato) e Versione **Digitale** (fondo colore aziendale, alto contrasto), con layout multipagina protetto da sovrapposizioni e denominazione file standardizzata: `Preventivo - Numero - Nome Cognome - Azienda.pdf`.
 - **Pannello "Gestisci" Economico Preventivo**: Tracciamento di acconti, saldi, extra e rimborsi (che diminuiscono l'incassato), pagamenti previsti (che non aumentano l'incassato fittiziamente) e servizi extra (proposti vs approvati).
 - **Nessun Doppio Conteggio nei Report**: Separazione rigorosa tra ricavi pattuiti, to-do inclusi nei preventivi, to-do autonomi, incassi reali e uscite.
-- **Spese con Ricorrenze Idempotenti**: Generazione automatica di spese ricorrenti settimanali, mensili e annuali senza duplicazioni, con corretta gestione della durata dei mesi (es. 28, 30, 31 giorni).
+- **Finanze & Cash Flow**: Ledger unico di Entrate e Uscite con KPI mensili (Entrate, Uscite, Cash Flow Netto, Costi Fissi Ricorrenti), ricorrenze settimanali/mensili/annuali idempotenti (con corretta gestione dei fine mese 28/30/31) e sezione **Compravendita / Flipping** con Margine Netto e ROI % calcolati automaticamente. La vecchia rotta/collezione `expenses` resta compatibile.
+- **Importatore Universale CSV / Excel (zero token)**: riconosce automaticamente i file MyFitnessPal/Apple Health, i fogli di compravendita e gli estratti conto; se gli header sono sconosciuti apre un wizard di mapping colonne. Tutto client-side e deterministico, reimportare lo stesso file non crea duplicati.
+- **Coda Appunti & Ingestion Batching**: accumuli note durante il giorno (box flottante 📝, `/queue` su Telegram) e le elabori con **una sola chiamata IA** (`/digest` su Telegram).
+- **Avvocato del Diavolo & Profili Specializzati**: toggle nell'assistente che stress-testa preventivi, margini di compravendita e carichi di allenamento con evidenze numeriche dai tuoi dati; il profilo di prompt (Ingestion Batch, Nutrizione/Fitness, Finance Coach, Second Brain) è scelto in automatico dal modulo attivo.
 - **Assistente IA Multimodale (Google Gemini)**: Accetta testo, foto o note vocali registrate direttamente dal microfono del dispositivo. Estrae to-do e appuntamenti multipli senza confondere nomi di servizi con clienti, con anteprima modificabile e disambiguazione prima del salvataggio.
 - **Sincronizzazione Bidirezionale Calendario (Google Calendar) & Notion**: Predisposta via Edge Functions con gestione token server-side protetta e risoluzione conflitti documentata.
 - **Backup & Ripristino Completo**: Esportazione ed importazione di tutti i dati, impostazioni e immagini in formato JSON autonomo, ripristinabile in qualsiasi nuova installazione.
@@ -73,13 +76,18 @@ Gestionale1/
 │   │   └── main.css             # Design neutro, accessibile, breakpoints 320px-1440px
 │   ├── utils/
 │   │   ├── calculations.js      # Logica economica, sconti, oneri, IVA e anti-duplicati
+│   │   ├── csv-importer.js      # Parser CSV, auto-detection template, wizard, commit idempotente
+│   │   ├── xlsx-reader.js       # Lettore .xlsx senza dipendenze (ZIP + XML)
 │   │   ├── formatters.js        # Formattazione valuta (€), date (it-IT) e file
 │   │   ├── id.js                # Generatore UUID
 │   │   └── indexed-db.js        # Gestione bozze preventivi e allegati locali
 │   ├── services/
 │   │   ├── store.js             # Store dati centralizzato, CRUD, Soft-delete e backup
 │   │   ├── supabase.js          # Wrapper client Supabase con Storage upload
-│   │   ├── ai.js                # Chiamata Gemini Edge Function con parser euristico
+│   │   ├── ai.js                # Gemini + AI_PROFILES, payload di sistema, batch coda, parser euristico
+│   │   ├── devils-advocate.js   # Evidenze deterministiche e critica a zero token dell'Avvocato del Diavolo
+│   │   ├── finances.js          # Logica pura: cash flow, ricorrenze, margine netto e ROI %
+│   │   ├── note-queue-sync.js   # Sync best-effort della coda con Supabase (ai_note_queue)
 │   │   └── pdf.js               # Motore PDF duplice (Digitale e Stampa)
 │   └── modules/
 │       ├── dashboard.js         # Dashboard operativa (solo urgenze, scadenze, quick to-do)
@@ -88,7 +96,9 @@ Gestionale1/
 │       ├── calendar.js          # Calendario mensile, agenda mobile e shooting
 │       ├── quotes.js            # Elenco e Editor Preventivi con foto voce
 │       ├── quote-manager.js     # Pannello Gestisci (acconti, saldi, extra, consegna)
-│       ├── expenses.js          # Gestione Spese con ricorrenze idempotenti
+│       ├── finances.js          # Finanze & Cash Flow: panoramica, compravendita, ricorrenze, import (ex expenses.js)
+│       ├── import-panel.js      # Drag & drop, auto-detection template e wizard di mapping
+│       ├── note-queue-ui.js     # Coda Appunti del Giorno (cassetto + box flottante)
 │       ├── catalog.js           # Catalogo prodotti e servizi
 │       ├── reports.js           # Analisi finanziaria, incassi e margini
 │       ├── settings.js          # Personalizzazione grafica, fisco e integrazioni
@@ -98,7 +108,8 @@ Gestionale1/
 ├── supabase/
 │   ├── migrations/
 │   │   ├── 001_initial_schema.sql    # Schema PostgreSQL con RLS su tutte le tabelle
-│   │   └── 002_storage_buckets.sql   # Bucket e policy sicurezza storage
+│   │   ├── 002_storage_buckets.sql   # Bucket e policy sicurezza storage
+│   │   └── 006_finances_and_queue.sql # finance_transactions, trading_items, ai_note_queue (+ copia idempotente di expenses)
 │   └── functions/
 │       ├── gemini-assistant/index.ts      # Edge Function Gemini Multimodal
 │       ├── google-calendar-sync/index.ts  # Edge Function 2-Way Google Calendar
@@ -106,6 +117,32 @@ Gestionale1/
 └── tests/
     └── gestionale.test.js       # Suite di test automatizzati per calcoli e regole
 ```
+
+---
+
+## 💶 Finanze, Compravendita, Importatore e Coda Appunti
+
+### Finanze & Cash Flow (`Finanze & Spese`)
+- **Panoramica**: KPI del mese (Entrate, Uscite, Cash Flow Netto, Costi Fissi Ricorrenti), ripartizione per categoria e tabella unificata con filtri per tipo, categoria e testo.
+- **Compravendita**: `Margine Netto = vendita − acquisto − spese extra − commissioni`, `ROI % = netto / (acquisto + extra)`. Il client replica esattamente le colonne `GENERATED` di `trading_items`. Il campo opzionale *Ore impiegate* alimenta il profitto orario reale.
+- **Ricorrenze**: mensili, settimanali e annuali. La generazione è idempotente e non rigenera le occorrenze cestinate. In `finance_transactions` la frequenza annuale è `yearly` (alias legacy `annual` accettato).
+- **Retrocompatibilità**: `store.getAll('expenses')` / `create` / `update` operano su `finance_transactions` con `type = 'expense'`; vecchi dati locali e vecchi backup vengono migrati automaticamente. Tabella SQL `expenses` non modificata: la migration 006 ne copia le righe in modo idempotente.
+
+### Importatore CSV / Excel (zero token)
+| Header riconosciuti | Template | Destinazione |
+|---|---|---|
+| `date`, `calories`, `protein`… / `data`, `calorie`… | MyFitnessPal / Apple Health | `body_daily_logs` (aggregato per giorno, upsert) |
+| `oggetto`, `acquisto`, `vendita`, `piattaforma`… | Compravendita / Flipping | `trading_items` |
+| `data`, `descrizione`, `entrata`, `uscita` (o `importo` con segno) | Estratto Conto / Finanze | `finance_transactions` |
+
+Supporta `.csv/.tsv` (separatori `; , tab |`, UTF-8 e Windows-1252, formati numerici italiani e inglesi) e `.xlsx` (lettore interno, date seriali incluse). Il vecchio formato `.xls` va salvato come `.xlsx` o CSV.
+
+### Coda Appunti & Telegram
+- **Web**: bottone flottante 📝 (o cassetto nell'Assistente IA) → scrivi e premi Invio, nessuna chiamata. *Elabora Coda con IA* invia **tutte** le note in un'unica richiesta con il profilo `ingestion_batch`, mostra l'anteprima e svuota la coda solo dopo la tua conferma.
+- **Telegram**: `/queue <testo>` accoda, `/digest` elabora tutto in blocco (body, finanze, compravendita; to-do ed eventi vengono elencati). Opzionale: `supabase secrets set GESTIONALE_OWNER_USER_ID="<uuid utente Supabase Auth>"` perché le note inserite dal webhook (service role) siano visibili all'app via RLS.
+
+### Avvocato del Diavolo & Profili
+Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header dell'assistente. Con il toggle attivo il payload di sistema include la persona critica e le evidenze calcolate sui dati reali (buffer +25-35% sui preventivi, ore implicite vs ore produttive, profitto orario reale vs tariffa dev, sonno e recupero). Senza modello IA risponde comunque con la critica deterministica. La tariffa oraria si imposta in *Impostazioni*. Profili disponibili in `AI_PROFILES`: `ingestion_batch`, `devils_advocate`, `nutrition_fitness`, `finance_coach`, `general_brain`.
 
 ---
 
@@ -123,6 +160,7 @@ Gestionale1/
 2. Copia ed esegui il file `supabase/migrations/002_storage_buckets.sql` per configurare i bucket:
    - `quote-attachments`: Privato, max 5 MB, supporta JPEG, PNG, WebP. Accesso concesso solo all'utente proprietario.
    - `business-assets`: Per loghi aziendali.
+3. Esegui in ordine le migration successive (`003`…`006`). La `006_finances_and_queue.sql` crea `finance_transactions`, `trading_items` (con `net_profit` e `roi_percent` come colonne generate) e `ai_note_queue`, tutte con RLS.
 
 ### 3. Distribuzione Edge Functions
 Assicurati di avere la CLI di Supabase installata (`supabase login`):

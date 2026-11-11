@@ -93,7 +93,9 @@ export function openImportModal(parentContainer, router, onRestored) {
           <div>Preventivi: <strong>${(s.quotes || []).length}</strong></div>
           <div>To-do: <strong>${(s.todos || []).length}</strong></div>
           <div>Appuntamenti / Shooting: <strong>${(s.appointments || []).length}</strong></div>
-          <div>Spese: <strong>${(s.expenses || []).length}</strong></div>
+          <div>Spese: <strong>${(s.expenses || []).length + (s.finance_transactions || []).filter(t => t.type === 'expense').length}</strong></div>
+          <div>Entrate: <strong>${(s.finance_transactions || []).filter(t => t.type === 'income').length}</strong></div>
+          <div>Articoli compravendita: <strong>${(s.trading_items || []).length}</strong></div>
         `;
         previewBox.style.display = 'block';
         confirmBtn.disabled = false;
@@ -130,6 +132,8 @@ export function openImportModal(parentContainer, router, onRestored) {
         ...parsedBackupData,
         settings: { ...store.data.settings, ...(parsedBackupData.settings || {}) },
       };
+      // I backup precedenti contengono `expenses`: confluiscono nel ledger finance_transactions
+      store.migrateLegacyExpenses();
       store.save();
       alert('Ripristino completato con successo!');
       closeModal();

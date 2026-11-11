@@ -1,5 +1,5 @@
 // tests/gestionale.test.js
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   calculateItemTotal,
   calculateItemGrossValue,
@@ -34,7 +34,36 @@ import {
   rejectTelegramPendingAction,
   buildProactiveMessages,
   getTelegramWebhookUrl,
+  parseTelegramCommand,
 } from '../src/services/telegram.js';
+import {
+  computeTradingMetrics,
+  getRecurrenceDates,
+  normalizeFrequency,
+  localTodayIso,
+  addDaysIso,
+} from '../src/services/finances.js';
+import {
+  parseCsv,
+  parseNumber,
+  parseDateValue,
+  detectTemplate,
+  analyzeRows,
+  buildImportPlan,
+  buildWizardPlan,
+  suggestWizardMapping,
+  commitImportPlan,
+  autoImportRows,
+} from '../src/utils/csv-importer.js';
+import { readXlsx } from '../src/utils/xlsx-reader.js';
+import {
+  AI_PROFILES,
+  selectAiProfile,
+  buildAiPayload,
+  composeSystemInstruction,
+  buildBatchPrompt,
+  processNoteQueueBatch,
+} from '../src/services/ai.js';
 
 describe('1. Calcoli Economici Voci di Preventivo', () => {
   it('calcola correttamente il netto di una voce con quantità, prezzo e sconto', () => {
@@ -702,3 +731,593 @@ describe('11. Integrazione Telegram Bot & 4° Livello di Protezione (Human-in-th
   });
 });
 
+
+
+// ===========================================================================
+// EVOLUZIONE: FINANZE & CASH FLOW, COMPRAVENDITA, IMPORTATORE, CODA APPUNTI, AVVOCATO DEL DIAVOLO
+// ===========================================================================
+
+describe('12. Compravendita / Flipping: Margine Netto e ROI % automatici', () => {
+  beforeEach(() => {
+    store.clearAll();
+  });
+
+  it('1. replica le colonne GENERATED di trading_items: netto = vendita - acquisto - extra - commissioni, ROI = netto / (acquisto + extra)', () => {
+    const m = computeTradingMetrics({ purchase_price: 40, extra_costs: 10, sale_price: 80, platform_fees: 6 });
+    expect(m.net_profit).toBe(24); // 80 - 40 - 10 - 6
+    expect(m.roi_percent).toBe(48); // 24 / 50 * 100
+    expect(m.margin_percent).toBe(30); // 24 / 80
+    expect(m.total_cost).toBe(50);
+  });
+
+  it('2. articolo non venduto: netto e ROI sono NULL; base costi zero: ROI NULL; arrotondamento ROUND(x,2) come PostgreSQL', () => {
+    expect(computeTradingMetrics({ purchase_price: 40, extra_costs: 0 })).toMatchObject({ net_profit: null, roi_percent: null });
+    expect(computeTradingMetrics({ purchase_price: 0, extra_costs: 0, sale_price: 30 })).toMatchObject({ net_profit: 30, roi_percent: null });
+    // 10.01 / 30 * 100 = 33.3666... -> 33.37
+    expect(computeTradingMetrics({ purchase_price: 30, sale_price: 40.01 }).roi_percent).toBe(33.37);
+    // perdita: -10 / 100 -> -10
+    expect(computeTradingMetrics({ purchase_price: 100, sale_price: 90 }).roi_percent).toBe(-10);
+    // niente errori di virgola mobile: 0.1 + 0.2
+    expect(computeTradingMetrics({ purchase_price: 0.1, sale_price: 0.3 }).net_profit).toBe(0.2);
+  });
+
+  it('3. lo store calcola e ricalcola automaticamente net_profit e roi_percent in creazione e modifica', () => {
+    const item = store.create('trading_items', { title: 'GoPro Hero 9', platform: 'Vinted', purchase_price: 100, extra_costs: 20 });
+    expect(item.status).toBe('in_stock');
+    expect(item.net_profit).toBeNull();
+    expect(item.roi_percent).toBeNull();
+
+    const sold = store.update('trading_items', item.id, { sale_price: 180, platform_fees: 12, status: 'sold' });
+    expect(sold.net_profit).toBe(48); // 180 - 100 - 20 - 12
+    expect(sold.roi_percent).toBe(40); // 48 / 120
+  });
+
+  it('4. getTradingStats: capitale in giacenza, utile realizzato e ROI medio (esclusi resi e cestinati)', () => {
+    store.create('trading_items', { title: 'In vendita', purchase_price: 100, status: 'in_stock' });
+    store.create('trading_items', { title: 'Riservato', purchase_price: 50, extra_costs: 10, status: 'reserved' });
+    store.create('trading_items', { title: 'Venduto A', purchase_price: 40, extra_costs: 10, sale_price: 80, platform_fees: 6 }); // +24, ROI 48
+    store.create('trading_items', { title: 'Venduto B', purchase_price: 100, sale_price: 90 }); // -10, ROI -10
+    store.create('trading_items', { title: 'Reso', purchase_price: 999, status: 'returned' });
+    const trashed = store.create('trading_items', { title: 'Cestinato', purchase_price: 500, status: 'in_stock' });
+    store.moveToTrash('trading_items', trashed.id);
+
+    const stats = store.getTradingStats();
+    expect(stats.stockCapital).toBe(100);
+    expect(stats.reservedCapital).toBe(60);
+    expect(stats.activeCapital).toBe(160);
+    expect(stats.realizedProfit).toBe(14); // 24 - 10
+    expect(stats.avgRoiPercent).toBe(19); // (48 - 10) / 2
+    expect(stats.soldCount).toBe(2);
+  });
+});
+
+describe('13. Finanze: Cash Flow mensile, Ricorrenze idempotenti e retrocompatibilità Spese', () => {
+  beforeEach(() => {
+    store.clearAll();
+  });
+
+  it('1. Cashflow Netto = Entrate - Uscite del mese (ignora altri mesi e cestinati, senza errori di virgola mobile)', () => {
+    store.create('finance_transactions', { type: 'income', amount: 1500, description: 'Saldo sito', date: '2026-11-03' });
+    store.create('finance_transactions', { type: 'income', amount: 500, description: 'Canone', date: '2026-11-20' });
+    store.create('finance_transactions', { type: 'expense', amount: 200, description: 'Hosting', category: 'Server & Hosting', date: '2026-11-05' });
+    store.create('finance_transactions', { type: 'expense', amount: 100, description: 'Adobe', category: 'Software & Abbonamenti', date: '2026-11-28' });
+    store.create('finance_transactions', { type: 'expense', amount: 999, description: 'Mese scorso', date: '2026-10-31' });
+    const trashed = store.create('finance_transactions', { type: 'expense', amount: 777, description: 'Cestinata', date: '2026-11-10' });
+    store.moveToTrash('finance_transactions', trashed.id);
+
+    const summary = store.getFinancialSummary(11, 2026);
+    expect(summary.totalIncome).toBe(2000);
+    expect(summary.totalExpenses).toBe(300);
+    expect(summary.netCashflow).toBe(1700);
+    expect(summary.byCategory.expense.map(c => [c.category, c.total])).toEqual([['Server & Hosting', 200], ['Software & Abbonamenti', 100]]);
+
+    store.create('finance_transactions', { type: 'income', amount: 0.1, description: 'a', date: '2026-12-01' });
+    store.create('finance_transactions', { type: 'income', amount: 0.2, description: 'b', date: '2026-12-02' });
+    expect(store.getFinancialSummary(12, 2026).totalIncome).toBe(0.3);
+  });
+
+  it('2. Previsione Uscite Ricorrenti del mese: mensili, settimanali, annuali; esclude sospese e terminate', () => {
+    const mk = (extra) => store.create('finance_transactions', { type: 'expense', category: 'Software & Abbonamenti', is_recurring: true, ...extra });
+    mk({ description: 'Hosting', amount: 20, date: '2026-01-15', recurrence_start_date: '2026-01-15', recurrence_frequency: 'monthly' });
+    mk({ description: 'Coworking', amount: 10, date: '2026-11-02', recurrence_start_date: '2026-11-02', recurrence_frequency: 'weekly' }); // 2, 9, 16, 23, 30 novembre
+    mk({ description: 'Dominio', amount: 120, date: '2025-11-20', recurrence_start_date: '2025-11-20', recurrence_frequency: 'annual' }); // alias legacy
+    mk({ description: 'Licenza marzo', amount: 300, date: '2025-03-01', recurrence_start_date: '2025-03-01', recurrence_frequency: 'yearly' });
+    mk({ description: 'Sospesa', amount: 99, date: '2026-01-01', recurrence_start_date: '2026-01-01', recurrence_frequency: 'monthly', is_suspended: true });
+    mk({ description: 'Terminata', amount: 50, date: '2026-01-01', recurrence_start_date: '2026-01-01', recurrence_end_date: '2026-06-30', recurrence_frequency: 'monthly' });
+
+    const before = store.getFinancialSummary(11, 2026);
+    expect(before.forecastRecurringExpenses).toBe(190); // 20 + 5x10 + 120
+    expect(before.recurringItemsCount).toBe(3);
+    expect(before.recurringPendingExpenses).toBeGreaterThan(0);
+
+    // Dopo la generazione fino a fine mese non resta nulla da addebitare
+    store.generateRecurringTransactions('2026-11-30');
+    const after = store.getFinancialSummary(11, 2026);
+    expect(after.recurringPendingExpenses).toBe(0);
+    expect(after.forecastRecurringExpenses).toBe(190);
+    expect(after.totalExpenses).toBe(190);
+  });
+
+  it('3. la generazione è IDEMPOTENTE, non rigenera le occorrenze cestinate e gestisce i fine mese', () => {
+    store.create('finance_transactions', {
+      type: 'expense', description: 'Server', amount: 25, date: '2026-01-31',
+      is_recurring: true, recurrence_start_date: '2026-01-31', recurrence_frequency: 'monthly',
+    });
+
+    const first = store.generateRecurringTransactions('2026-05-31');
+    expect(first).toBe(4); // feb, mar, apr, mag
+    expect(store.generateRecurringTransactions('2026-05-31')).toBe(0);
+
+    const dates = store.getAll('finance_transactions').map(t => t.date).sort();
+    expect(dates).toEqual(['2026-01-31', '2026-02-28', '2026-03-31', '2026-04-30', '2026-05-31']);
+
+    // Una occorrenza cestinata dall'utente non ricompare
+    const feb = store.getAll('finance_transactions').find(t => t.date === '2026-02-28');
+    store.moveToTrash('finance_transactions', feb.id);
+    expect(store.generateRecurringTransactions('2026-05-31')).toBe(0);
+
+    expect(getRecurrenceDates({ start: '2026-01-31', frequency: 'monthly' }, '2026-01-01', '2026-03-31'))
+      .toEqual(['2026-01-31', '2026-02-28', '2026-03-31']);
+    expect(normalizeFrequency('annual')).toBe('yearly');
+  });
+
+  it('4. retrocompatibilità: la collezione `expenses` è una vista su finance_transactions con type = expense', () => {
+    const exp = store.create('expenses', { description: 'Abbonamento Adobe', amount: 60, category: 'Software', date: '2026-11-04' });
+    store.create('finance_transactions', { type: 'income', amount: 800, description: 'Incasso', date: '2026-11-05' });
+
+    const ledger = store.getAll('finance_transactions');
+    expect(ledger.find(t => t.id === exp.id).type).toBe('expense');
+    expect(store.getAll('expenses').map(e => e.id)).toEqual([exp.id]); // le entrate non compaiono come spese
+    expect(store.getById('expenses', exp.id).description).toBe('Abbonamento Adobe');
+
+    store.update('expenses', exp.id, { amount: 65 });
+    expect(store.getFinancialSummary(11, 2026).totalExpenses).toBe(65);
+
+    store.moveToTrash('expenses', exp.id);
+    expect(store.getAll('expenses')).toHaveLength(0);
+    expect(store.getAllTrash().some(t => t.id === exp.id && t.collection === 'finance_transactions')).toBe(true);
+    expect(store.restoreFromTrash('expenses', exp.id)).toBe(true);
+    expect(store.getAll('expenses')).toHaveLength(1);
+  });
+
+  it('5. le vecchie spese (data.expenses da localStorage o backup) migrano nel ledger in modo idempotente', () => {
+    store.data.expenses = [
+      { id: 'legacy-1', description: 'Server annuale', amount: 120, category: 'Hosting', date: '2025-06-01', is_recurring: true, recurrence_frequency: 'annual', recurrence_start_date: '2025-06-01' },
+      { id: 'legacy-2', description: 'Cestinata', amount: 10, date: '2025-07-01', is_deleted: true },
+    ];
+    expect(store.migrateLegacyExpenses()).toBe(2);
+    expect(store.data.expenses).toBeUndefined();
+    const migrated = store.getById('finance_transactions', 'legacy-1');
+    expect(migrated.type).toBe('expense');
+    expect(migrated.recurrence_frequency).toBe('yearly');
+    expect(store.getAll('finance_transactions')).toHaveLength(1);
+
+    store.data.expenses = [{ id: 'legacy-1', description: 'Server annuale', amount: 120, date: '2025-06-01' }];
+    expect(store.migrateLegacyExpenses()).toBe(0); // già presente
+  });
+});
+
+describe('14. Importatore Universale CSV / Excel (zero token)', () => {
+  beforeEach(() => {
+    store.clearAll();
+  });
+
+  it('1. parser CSV: virgolette, separatore ; , BOM e riga "sep=;"', () => {
+    expect(parseCsv('a;b;c\n1;"due; con punto e virgola";3\r\n')).toEqual([['a', 'b', 'c'], ['1', 'due; con punto e virgola', '3']]);
+    expect(parseCsv('﻿x,y\n"he said ""hi""",2')).toEqual([['x', 'y'], ['he said "hi"', '2']]);
+    expect(parseCsv('sep=;\nA;B\n1;2')).toEqual([['A', 'B'], ['1', '2']]);
+    expect(parseNumber('1.234,56', { money: true })).toBe(1234.56);
+    expect(parseNumber('€ 12,50', { money: true })).toBe(12.5);
+    expect(parseNumber('(12.50)')).toBe(-12.5);
+    expect(parseNumber('72.456')).toBe(72.456); // peso: il punto singolo è decimale
+    expect(parseDateValue('11/11/2026')).toBe('2026-11-11');
+    expect(parseDateValue('2026-11-11 08:30:00')).toBe('2026-11-11');
+    expect(parseDateValue('31/02/2026')).toBeNull();
+  });
+
+  it('2. auto-detection MyFitnessPal: aggrega i pasti per data e scrive in body_daily_logs (re-import senza duplicati)', () => {
+    const csv = [
+      'Date,Meal,Calories,Fat (g),Saturated Fat,Carbohydrates (g),Sugar,Protein (g)',
+      '2026-11-10,Breakfast,500,10,3,60,12,30',
+      '2026-11-10,Lunch,800,20,6,90,10,50',
+      '2026-11-11,Dinner,"1,200",40,12,120,20,70',
+    ].join('\n');
+
+    const { table, detection } = analyzeRows(parseCsv(csv));
+    expect(detection.template).toBe('nutrition');
+    expect(detection.target).toBe('body_daily_logs');
+
+    const plan = buildImportPlan(table, detection.template, detection.mapping);
+    expect(plan.records).toEqual([
+      { date: '2026-11-10', calories_kcal: 1300, protein_g: 80, carbs_g: 150, fat_g: 30 },
+      { date: '2026-11-11', calories_kcal: 1200, protein_g: 70, carbs_g: 120, fat_g: 40 },
+    ]);
+
+    const first = commitImportPlan(plan, store);
+    expect(first.imported).toBe(2);
+    const day = store.getAll('body_daily_logs').find(l => l.date === '2026-11-10');
+    expect(day.calories_kcal).toBe(1300);
+
+    const second = commitImportPlan(plan, store);
+    expect(second.imported).toBe(0);
+    expect(second.updated).toBe(2);
+    expect(store.getAll('body_daily_logs')).toHaveLength(2);
+  });
+
+  it('3. auto-detection Compravendita (oggetto/acquisto/vendita/piattaforma): calcola margine e ROI e salta i duplicati', () => {
+    const csv = [
+      'Oggetto;Acquisto;Vendita;Piattaforma;Spese Extra;Commissioni',
+      'GoPro Hero 9;"100,00";"180,00";Vinted;"20,00";"12,00"',
+      'Tastiera meccanica;35;;Subito;0;0',
+      ';10;20;eBay;0;0',
+    ].join('\n');
+
+    const { table, detection } = analyzeRows(parseCsv(csv));
+    expect(detection.template).toBe('trading');
+    expect(detection.target).toBe('trading_items');
+
+    const plan = buildImportPlan(table, detection.template, detection.mapping);
+    expect(plan.records).toHaveLength(2);
+    expect(plan.errors).toHaveLength(1); // riga senza oggetto
+    const gopro = plan.records.find(r => r.title === 'GoPro Hero 9');
+    expect(gopro).toMatchObject({ platform: 'Vinted', status: 'sold', net_profit: 48, roi_percent: 40 });
+    expect(plan.records.find(r => r.title === 'Tastiera meccanica').status).toBe('in_stock');
+
+    expect(commitImportPlan(plan, store).imported).toBe(2);
+    const again = commitImportPlan(plan, store);
+    expect(again.imported).toBe(0);
+    expect(again.duplicates).toBe(2);
+    expect(store.getAll('trading_items')).toHaveLength(2);
+    expect(store.getTradingStats().realizedProfit).toBe(48);
+  });
+
+  it('4. auto-detection Estratto Conto (data/descrizione/entrata/uscita) e importo con segno; righe identiche nello stesso file restano entrambe', () => {
+    const csv = [
+      'Data;Descrizione;Entrata;Uscita',
+      '03/11/2026;Saldo sito Rossi;"1.500,00";',
+      '05/11/2026;Caffè;;"1,20"',
+      '05/11/2026;Caffè;;"1,20"',
+      'non-una-data;Errore;;10',
+    ].join('\n');
+    const { table, detection } = analyzeRows(parseCsv(csv));
+    expect(detection.template).toBe('finance');
+
+    const plan = buildImportPlan(table, detection.template, detection.mapping);
+    expect(plan.records.map(r => [r.type, r.amount])).toEqual([['income', 1500], ['expense', 1.2], ['expense', 1.2]]);
+    expect(plan.errors).toHaveLength(1);
+
+    expect(commitImportPlan(plan, store).imported).toBe(3);
+    expect(commitImportPlan(plan, store)).toMatchObject({ imported: 0, duplicates: 3 });
+    expect(store.getFinancialSummary(11, 2026).netCashflow).toBe(1497.6);
+
+    // Variante a colonna unica con segno (tipico estratto conto bancario)
+    store.clearAll();
+    const signed = autoImportRows(parseCsv('Data operazione,Causale,Importo\n2026-11-02,Bonifico cliente,800.50\n2026-11-03,Carburante,-45.00'), store);
+    expect(signed.needsMapping).toBe(false);
+    expect(signed.result.imported).toBe(2);
+    expect(store.getFinancialSummary(11, 2026)).toMatchObject({ totalIncome: 800.5, totalExpenses: 45 });
+  });
+
+  it('5. Wizard di Mapping: header sconosciuti -> nessun template, mappatura manuale Finanze e accoppiamento Acquisto/Vendita', () => {
+    const csv = [
+      'Giorno X;Cosa;Soldi;Natura',
+      '2026-11-01;Stipendio;2000;Entrata',
+      '2026-11-02;Affitto;700;Uscita',
+    ].join('\n');
+    const { table, detection } = analyzeRows(parseCsv(csv));
+    expect(detection.template).toBeNull();
+
+    expect(suggestWizardMapping(table).date).toBe(0); // "Giorno X" suggerito come colonna Data
+    const finance = buildWizardPlan(table, { date: 0, description: 1, amount: 2, type: 3 });
+    expect(finance.target).toBe('finance_transactions');
+    expect(finance.records.map(r => [r.type, r.amount])).toEqual([['income', 2000], ['expense', 700]]);
+
+    const flips = analyzeRows(parseCsv('Quando;Roba;Euro;Mossa\n2026-10-01;Monopattino;60;Acquisto\n2026-10-09;Monopattino;95;Vendita\n2026-10-10;Cuffie;30;Acquisto'));
+    const trading = buildWizardPlan(flips.table, { date: 0, description: 1, amount: 2, type: 3 });
+    expect(trading.target).toBe('trading_items');
+    const monopattino = trading.records.find(r => r.title === 'Monopattino');
+    expect(monopattino).toMatchObject({ purchase_price: 60, sale_price: 95, status: 'sold', net_profit: 35 });
+    expect(trading.records.find(r => r.title === 'Cuffie').status).toBe('in_stock');
+
+    // Mappatura incompleta: errore esplicito, nessun record
+    expect(buildWizardPlan(table, { date: 0, description: null, amount: 2, type: null }).records).toHaveLength(0);
+  });
+
+  it('6. legge un vero file .xlsx (ZIP deflate + sharedStrings + date seriali) senza librerie esterne', async () => {
+    const enc = new TextEncoder();
+    const deflate = async (bytes) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer());
+    const files = {
+      'xl/workbook.xml': '<workbook xmlns:r="x"><sheets><sheet name="Movimenti" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+      'xl/sharedStrings.xml': '<sst><si><t>Data</t></si><si><t>Descrizione</t></si><si><t>Importo</t></si><si><t>Stipendio &amp; bonus</t></si><si><t>Caffè</t></si></sst>',
+      'xl/styles.xml': '<styleSheet><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>',
+    };
+    const serial = Math.round((Date.UTC(2026, 10, 11) - Date.UTC(1899, 11, 30)) / 86400000);
+    files['xl/worksheets/sheet1.xml'] = `<worksheet><sheetData>
+      <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row>
+      <row r="2"><c r="A2" s="1"><v>${serial}</v></c><c r="B2" t="s"><v>3</v></c><c r="C2"><v>1500.5</v></c></row>
+      <row r="3"><c r="A3" s="1"><v>${serial + 1}</v></c><c r="B3" t="s"><v>4</v></c><c r="C3"><v>-1.2</v></c></row>
+    </sheetData></worksheet>`;
+
+    const chunks = [];
+    const central = [];
+    let offset = 0;
+    for (const [name, content] of Object.entries(files)) {
+      const nameBytes = enc.encode(name);
+      const raw = enc.encode(content);
+      const comp = await deflate(raw);
+      const local = new Uint8Array(30 + nameBytes.length);
+      const lv = new DataView(local.buffer);
+      lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(8, 8, true);
+      lv.setUint32(18, comp.length, true); lv.setUint32(22, raw.length, true); lv.setUint16(26, nameBytes.length, true);
+      local.set(nameBytes, 30);
+      const cen = new Uint8Array(46 + nameBytes.length);
+      const cv = new DataView(cen.buffer);
+      cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true); cv.setUint16(10, 8, true);
+      cv.setUint32(20, comp.length, true); cv.setUint32(24, raw.length, true); cv.setUint16(28, nameBytes.length, true);
+      cv.setUint32(42, offset, true);
+      cen.set(nameBytes, 46);
+      chunks.push(local, comp);
+      central.push(cen);
+      offset += local.length + comp.length;
+    }
+    const cdSize = central.reduce((n, c) => n + c.length, 0);
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, central.length, true); ev.setUint16(10, central.length, true);
+    ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+    const zip = new Uint8Array(offset + cdSize + 22);
+    let pos = 0;
+    for (const part of [...chunks, ...central, eocd]) { zip.set(part, pos); pos += part.length; }
+
+    const { sheetName, rows } = await readXlsx(zip);
+    expect(sheetName).toBe('Movimenti');
+    expect(rows).toEqual([
+      ['Data', 'Descrizione', 'Importo'],
+      ['2026-11-11', 'Stipendio & bonus', 1500.5],
+      ['2026-11-12', 'Caffè', -1.2],
+    ]);
+
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const imported = autoImportRows(rows, store);
+    vi.unstubAllGlobals();
+    expect(imported.detection.template).toBe('finance');
+    expect(imported.result.imported).toBe(2);
+    expect(fetchSpy).not.toHaveBeenCalled(); // zero token / zero rete
+  });
+});
+
+describe('15. Coda Appunti & Ingestion Batching', () => {
+  beforeEach(() => {
+    store.clearAll();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('1. accoda senza chiamate IA, mantiene l\'ordine di inserimento e marca le note come elaborate', () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    expect(store.addQueuedNote('   ')).toBeNull();
+    const a = store.addQueuedNote('Pull Up 20(10,10,10,10)');
+    const b = store.addQueuedNote('ho speso 45€ di benzina', 'telegram');
+    const c = store.addQueuedNote('richiamare Marco', 'altro-sconosciuto');
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    expect(store.getQueuedNotes().map(n => n.content)).toEqual(['Pull Up 20(10,10,10,10)', 'ho speso 45€ di benzina', 'richiamare Marco']);
+    expect(b.source).toBe('telegram');
+    expect(c.source).toBe('web');
+    expect(a.status).toBe('queued');
+
+    expect(store.markNotesProcessed([a.id, b.id])).toBe(2);
+    expect(store.markNotesProcessed([a.id])).toBe(0); // idempotente
+    expect(store.getQueuedNotes().map(n => n.id)).toEqual([c.id]);
+  });
+
+  it('2. elabora N note con UNA sola chiamata (profilo ingestion_batch) concatenandole in un unico prompt', async () => {
+    store.updateSettings({ gemini_api_key: 'TEST_KEY' });
+    store.addQueuedNote('Pull Up 20(10,10,10,10), peso 75.1kg');
+    store.addQueuedNote('ho speso 45€ di benzina');
+    store.addQueuedNote('devo richiamare Marco domani per il preventivo');
+
+    const fetchMock = vi.fn(async (url) => {
+      if (String(url).includes(':generateContent')) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{ content: { parts: [{ text: JSON.stringify({
+              summary: '1 → Body · 2 → Finanze · 3 → To-do',
+              body_log: { date: '2026-11-11', body_weight_kg: 75.1, workout_entries: [{ column_slug: 'pull_up', column_name: 'Pull Up', raw_notation: '20(10,10,10,10)' }] },
+              finance_transactions: [{ type: 'expense', amount: 45, description: 'Benzina', category: 'Trasporti & Viaggi', date: '2026-11-11' }],
+              todos: [{ title: 'Richiamare Marco', due_date: null, priority: 'media' }],
+            }) }] } }],
+          }),
+        };
+      }
+      return { ok: false, status: 404 }; // embedding non disponibile -> fallback locale
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await processNoteQueueBatch(store.getQueuedNotes());
+
+    const generateCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes(':generateContent'));
+    expect(generateCalls).toHaveLength(1); // 3 note -> 1 sola chiamata
+    const sentText = JSON.parse(generateCalls[0][1].body).contents[0].parts[0].text;
+    expect(sentText).toContain('Pull Up 20(10,10,10,10)');
+    expect(sentText).toContain('ho speso 45€ di benzina');
+    expect(sentText).toContain('richiamare Marco');
+    expect(sentText).toContain('PROFILO ATTIVO');
+    expect(sentText).toContain('Ingestion Batch');
+
+    expect(result.profile).toBe('ingestion_batch');
+    expect(result.source).toBe('gemini_direct');
+    expect(result.aiCalls).toBe(1);
+    expect(result.notesCount).toBe(3);
+    expect(result.finance_transactions[0]).toMatchObject({ type: 'expense', amount: 45 });
+    expect(result.todos).toHaveLength(1);
+    expect(result.body_log.workout_entries).toHaveLength(1);
+
+    // Le note restano in coda finché il chiamante non conferma
+    expect(store.getQueuedNotes()).toHaveLength(3);
+    expect(buildBatchPrompt(store.getQueuedNotes())).toContain('3 note');
+  });
+
+  it('3. senza chiavi IA il batch gira in locale a zero token e somma kcal/macro dei pasti della giornata', async () => {
+    store.addQueuedNote('colazione 400 kcal');
+    store.addQueuedNote('pranzo 700 kcal con 50g proteine');
+    store.addQueuedNote('ho speso 30€ di hosting Vercel');
+
+    const result = await processNoteQueueBatch(store.getQueuedNotes());
+    expect(result.source).toBe('local_heuristic');
+    expect(result.aiCalls).toBe(0);
+    expect(result.body_log.calories_kcal).toBe(1100);
+    expect(result.body_log.protein_g).toBe(50);
+    expect(result.finance_transactions[0]).toMatchObject({ type: 'expense', amount: 30, category: 'Server & Hosting' });
+    expect(result.summary).toContain('3 note');
+  });
+
+  it('4. Telegram: /queue accoda, /digest elabora tutto in blocco, applica i risultati e svuota la coda (solo utente autorizzato)', async () => {
+    store.updateSettings({ telegram_allowed_user_id: '99887766' });
+    const ctx = { chatId: 99887766, fromUserId: 99887766 };
+
+    expect(parseTelegramCommand('/queue@MioBot ciao mondo')).toEqual({ name: 'queue', args: 'ciao mondo' });
+    expect(parseTelegramCommand('/digest')).toEqual({ name: 'digest', args: '' });
+    expect(parseTelegramCommand('Pull Up 20(10,10)')).toBeNull();
+
+    // utente non autorizzato: nessuna nota accodata
+    const blocked = processIncomingTelegramMessage({ chatId: 1, fromUserId: 1, text: '/queue spia' });
+    expect(blocked.ok).toBe(false);
+    expect(store.getQueuedNotes()).toHaveLength(0);
+
+    expect(processIncomingTelegramMessage({ ...ctx, text: '/queue' }).intent).toBe('queue_help');
+    expect(processIncomingTelegramMessage({ ...ctx, text: '/digest' }).replyText).toContain('vuota');
+
+    const r1 = processIncomingTelegramMessage({ ...ctx, text: '/queue Pull Up 20(10,10,10,10), peso 75.1kg', date: '2026-11-11' });
+    processIncomingTelegramMessage({ ...ctx, text: '/queue ho speso 45€ di benzina' });
+    processIncomingTelegramMessage({ ...ctx, text: '/queue Devo richiamare Marco' });
+    expect(r1.intent).toBe('queue_add');
+    expect(r1.note.source).toBe('telegram');
+    expect(store.getQueuedNotes()).toHaveLength(3);
+    expect(store.getBodyColumns().length).toBeGreaterThan(0);
+
+    const digest = processIncomingTelegramMessage({ ...ctx, text: '/digest' });
+    expect(digest.intent).toBe('digest');
+    expect(digest.notesCount).toBe(3);
+
+    const done = await digest.run();
+    expect(done.notesCount).toBe(3);
+    expect(done.replyText).toContain('Digest completato');
+    expect(done.replyText).toContain('1 chiamata');
+    expect(store.getQueuedNotes()).toHaveLength(0);
+    expect(store.getAll('finance_transactions').some(t => t.type === 'expense' && t.amount === 45)).toBe(true);
+    expect(store.getAll('todos').some(t => /Marco/.test(t.title))).toBe(true);
+    expect(store.getAll('body_workout_entries').length).toBeGreaterThan(0);
+  });
+});
+
+describe('16. Profili Specializzati & modalità "Avvocato del Diavolo"', () => {
+  beforeEach(() => {
+    store.clearAll();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('1. selezione automatica del profilo dal modulo attivo; il toggle forza devils_advocate; il profilo esplicito vince', () => {
+    expect(Object.keys(AI_PROFILES).sort()).toEqual(['devils_advocate', 'finance_coach', 'general_brain', 'ingestion_batch', 'nutrition_fitness']);
+    expect(selectAiProfile({ activeModule: 'body' })).toBe('nutrition_fitness');
+    expect(selectAiProfile({ activeModule: 'finances' })).toBe('finance_coach');
+    expect(selectAiProfile({ activeModule: 'expenses' })).toBe('finance_coach');
+    expect(selectAiProfile({ activeModule: 'brain' })).toBe('general_brain');
+    expect(selectAiProfile({ activeModule: 'todos' })).toBe('general_brain');
+    expect(selectAiProfile({})).toBe('general_brain');
+    expect(selectAiProfile({ activeModule: 'body', devilsAdvocate: true })).toBe('devils_advocate');
+    expect(selectAiProfile({ activeModule: 'body', devilsAdvocate: true, profile: 'ingestion_batch' })).toBe('ingestion_batch');
+  });
+
+  it('2. con il toggle attivo il payload di sistema contiene la persona critica e le evidenze calcolate dai dati reali', () => {
+    const today = localTodayIso();
+    // Preventivo ambizioso, senza limiti alle revisioni, consegna fra 5 giorni
+    store.create('quotes', { quote_number: 'PREV-2026-001', title: 'E-commerce Rossi', status: 'bozza', issue_date: today, agreed_total: 3000, conditions: 'Pagamento a 30 giorni.', expected_delivery: addDaysIso(today, 5) });
+    // Rivendita con profitto orario basso: netto 20€ in 5 ore
+    store.create('trading_items', { title: 'Console retro', purchase_price: 20, sale_price: 45, platform_fees: 5, hours_spent: 5, sale_date: today });
+    // Sonno scarso + due giorni di allenamento ravvicinati
+    for (const offset of [0, -1, -2]) store.upsertBodyDailyLog({ date: addDaysIso(today, offset), sleep_hours: 5.5 });
+    store.upsertBodyWorkoutEntry({ date: today, column_id: 'col-pull-up', raw_notation: '20(10,10,10)' });
+    store.upsertBodyWorkoutEntry({ date: addDaysIso(today, -1), column_id: 'col-pull-up', raw_notation: '20(10,10,10)' });
+
+    const on = buildAiPayload({ prompt: 'Conviene accettare questo preventivo, continuare le rivendite su Vinted e allenarmi oggi?', activeModule: 'body', devilsAdvocate: true });
+    expect(on.profile).toBe('devils_advocate');
+    expect(on.devilsAdvocate).toBe(true);
+    expect(on.personaInstruction).toContain('AVVOCATO DEL DIAVOLO');
+    expect(on.personaInstruction).toContain('+25-35%');
+
+    const system = composeSystemInstruction(on);
+    expect(system).toContain('PROFILO ATTIVO');
+    expect(system).toContain('AVVOCATO DEL DIAVOLO');
+    expect(system).toContain('EVIDENZE CALCOLATE DAI DATI REALI');
+
+    const q = on.devilsEvidence.quotes.pipeline[0];
+    expect(q.bufferedRange).toEqual({ min: 3750, max: 4050 }); // +25% / +35%
+    expect(q.warnings.join(' ')).toMatch(/revisioni/i);
+    expect(q.warnings.join(' ')).toMatch(/Scadenza irrealistica/);
+
+    const t = on.devilsEvidence.trading;
+    expect(t.soldItems[0].hourlyProfit).toBe(4); // 20€ / 5h, ben sotto la tariffa dev di 50€/h
+    expect(t.belowRateCount).toBe(1);
+
+    const b = on.devilsEvidence.body;
+    expect(b.avgSleep7d).toBe(5.5);
+    expect(b.overtrainingRisk).toBe('alto');
+    expect(b.warnings.join(' ')).toMatch(/overtraining/i);
+
+    // Senza toggle: profilo automatico, nessuna persona critica nel payload
+    const off = buildAiPayload({ prompt: 'Conviene fare questo preventivo?', activeModule: 'quotes', devilsAdvocate: false });
+    expect(off.profile).toBe('finance_coach');
+    expect(off.devilsAdvocate).toBe(false);
+    expect(composeSystemInstruction(off)).not.toContain('AVVOCATO DEL DIAVOLO');
+    expect(off.devilsEvidence).toBeUndefined();
+  });
+
+  it('3. processAiPrompt in modalità Avvocato del Diavolo: invia la persona al modello e non crea to-do/eventi', async () => {
+    store.updateSettings({ gemini_api_key: 'TEST_KEY' });
+    const fetchMock = vi.fn(async (url) => {
+      if (String(url).includes(':generateContent')) {
+        return {
+          ok: true,
+          json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+            summary: 'Preventivo troppo ottimista',
+            todos: [{ title: 'NON dovrebbe essere creato' }],
+            critique: { verdict: 'Non accettare così', risks: ['Scadenza irrealistica'], recommendations: ['Aggiungi +30% di buffer'], buffer_percent: { min: 25, max: 35 }, hourly_profit: null },
+          }) }] } }] }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await processAiPrompt({ prompt: 'E-commerce a 3000€ in 10 giorni, revisioni illimitate', devilsAdvocate: true, activeModule: 'quotes' });
+    const calls = fetchMock.mock.calls.filter(([url]) => String(url).includes(':generateContent'));
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0][1].body).contents[0].parts[0].text).toContain('AVVOCATO DEL DIAVOLO');
+    expect(JSON.parse(calls[0][1].body).generationConfig.temperature).toBe(AI_PROFILES.devils_advocate.temperature);
+
+    expect(res.profile).toBe('devils_advocate');
+    expect(res.todos).toHaveLength(0); // anche se il modello ne restituisce, la persona critica non crea azioni
+    expect(res.critique.verdict).toBe('Non accettare così');
+    expect(res.critique.buffer_percent).toEqual({ min: 25, max: 35 });
+  });
+
+  it('4. senza IA la critica è a zero token: ore implicite vs ore produttive, buffer 25-35% e nessuna proposta operativa', async () => {
+    const res = await processAiPrompt({ prompt: 'Ti sembra fattibile un e-commerce a 3000€ in 10 giorni?', devilsAdvocate: true, activeModule: 'quotes' });
+    expect(res.source).toBe('local_heuristic');
+    expect(res.aiCalls).toBe(0);
+    expect(res.todos).toHaveLength(0);
+    expect(res.appointments).toHaveLength(0);
+    expect(res.critique.risks.join(' ')).toMatch(/scadenza irrealistica/i);
+    expect(res.critique.buffer_percent).toEqual({ min: 25, max: 35 });
+    expect(res.critique.recommendations.join(' ')).toMatch(/revisioni/i);
+  });
+});

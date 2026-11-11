@@ -9,18 +9,24 @@ import { renderTodos } from './modules/todos.js';
 import { renderClients } from './modules/clients.js';
 import { renderCalendar } from './modules/calendar.js';
 import { renderQuotes, openQuoteEditorModal } from './modules/quotes.js';
-import { renderExpenses } from './modules/expenses.js';
+import { renderFinances } from './modules/finances.js';
 import { renderReports } from './modules/reports.js';
 import { renderCatalog } from './modules/catalog.js';
 import { renderSettings } from './modules/settings.js';
 import { renderHelp } from './modules/help.js';
 import { renderTrash } from './modules/trash.js';
 import { openAiModal } from './modules/ai-assistant.js';
+import { mountNoteQueueWidget } from './modules/note-queue-ui.js';
 import { exportFullBackup, openImportModal } from './modules/backup.js';
 
 // Espone i moduli globalmente per interazioni rapide
 window._appModules = {
   quotes: { openQuoteEditorModal },
+};
+
+// Alias di rotte legacy: il vecchio modulo Spese vive ora in Finanze & Spese
+const ROUTE_ALIASES = {
+  expenses: 'finances',
 };
 
 class Router {
@@ -39,7 +45,7 @@ class Router {
       clients: { title: 'Clienti', render: renderClients },
       calendar: { title: 'Calendario & Agenda', render: renderCalendar },
       quotes: { title: 'Preventivi', render: renderQuotes },
-      expenses: { title: 'Spese', render: renderExpenses },
+      finances: { title: 'Finanze & Cash Flow', render: renderFinances },
       reports: { title: 'Report Finanziari', render: renderReports },
       catalog: { title: 'Catalogo Servizi', render: renderCatalog },
       settings: { title: 'Impostazioni', render: renderSettings },
@@ -75,6 +81,9 @@ class Router {
     document.getElementById('top-ai-btn')?.addEventListener('click', () => openAiModal({ onSaved: () => this.refresh() }));
     document.getElementById('bottom-nav-ai-btn')?.addEventListener('click', () => openAiModal({ onSaved: () => this.refresh() }));
 
+    // Coda Appunti del Giorno: box flottante sempre disponibile; "Elabora Coda" apre l'assistente e avvia 1 sola chiamata
+    mountNoteQueueWidget({ onProcess: () => openAiModal({ autoProcessQueue: true, onSaved: () => this.refresh() }) });
+
     // Backup quick actions
     document.getElementById('quick-backup-export')?.addEventListener('click', () => exportFullBackup());
     document.getElementById('quick-backup-import')?.addEventListener('click', () => openImportModal(document.body, this, () => this.refresh()));
@@ -93,6 +102,7 @@ class Router {
   }
 
   navigate(route, params = {}) {
+    route = ROUTE_ALIASES[route] || route;
     if (!this.routes[route]) route = 'dashboard';
     this.currentRoute = route;
     this.routeParams = params;

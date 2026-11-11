@@ -4,6 +4,7 @@
 // - Pipeline 4° Livello di Protezione (Human-in-the-Loop Confirmation) su telegram_pending_actions
 // - Riconoscimento diretto Body & Allenamenti (notazione 20(10,10,10,10), kcal, peso, sonno)
 // - Proattività Scheduled (Morning Brief 08:30 & Evening Reminder 21:30)
+// - Coda Appunti: /queue <testo> accoda una nota (zero chiamate IA), /digest le elabora tutte con 1 sola chiamata
 
 import { store } from './store.js';
 import { getSupabase } from './supabase.js';
@@ -16,6 +17,7 @@ import {
   parseWorkoutNotation,
   calculateColumnRecoveryStatus,
 } from '../utils/body-parser.js';
+import { processNoteQueueBatch, applyAiResultToStore } from './ai.js';
 
 export const DEFAULT_SUPABASE_PROJECT_ID = 'hbyqofpkkenzgbggvlch';
 
@@ -161,6 +163,67 @@ export async function registerTelegramWebhook(botTokenInput) {
 }
 
 /**
+ * Riconosce i comandi del bot: "/queue testo", "/queue@NomeBot testo", "/digest".
+ * @returns {{name: string, args: string}|null}
+ */
+export function parseTelegramCommand(text = '') {
+  const m = String(text || '').trim().match(/^\/(queue|digest)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  if (!m) return null;
+  return { name: m[1].toLowerCase(), args: (m[2] || '').trim() };
+}
+
+/** /queue <testo>: accoda la nota in ai_note_queue senza alcuna chiamata IA. */
+function handleQueueCommand(args) {
+  if (!args) {
+    return {
+      ok: true,
+      intent: 'queue_help',
+      replyText: [
+        '📝 Usa /queue <testo> per accodare una nota senza consumare token.',
+        'Esempio: /queue Pull Up 20(10,10,10,10) e ho speso 45€ di benzina',
+        'Quando vuoi elaborarle tutte in una sola chiamata: /digest',
+      ].join('\n'),
+    };
+  }
+  const note = store.addQueuedNote(args, 'telegram');
+  const count = store.getQueuedNotes().length;
+  return {
+    ok: true,
+    intent: 'queue_add',
+    note,
+    queueSize: count,
+    replyText: `📝 Nota accodata (${count} in coda). Usa /digest per elaborarle tutte insieme.`,
+  };
+}
+
+/**
+ * /digest: elabora in blocco tutte le note in coda con UNA sola chiamata (profilo ingestion_batch),
+ * applica i risultati allo store e segna le note come elaborate.
+ * I nuovi clienti restano da confermare nell'app (non vengono creati alla cieca da Telegram).
+ */
+export async function processTelegramDigest() {
+  const notes = store.getQueuedNotes();
+  if (notes.length === 0) {
+    return { ok: true, intent: 'digest', empty: true, notesCount: 0, replyText: '📭 La coda appunti è vuota.' };
+  }
+
+  const result = await processNoteQueueBatch(notes);
+  const applied = applyAiResultToStore(result);
+  const processed = store.markNotesProcessed(result.noteIds);
+
+  const lines = [`✅ Digest completato: ${processed} ${processed === 1 ? 'nota' : 'note'} in 1 chiamata${result.aiCalls === 0 ? ' (motore locale, 0 token)' : ''}.`];
+  if (applied.body) lines.push(`• 🏋️ Body: log del giorno aggiornato${applied.workouts ? ` (${applied.workouts} esercizi)` : ''}`);
+  if (applied.finance) lines.push(`• 💶 Finanze: ${applied.finance} ${applied.finance === 1 ? 'movimento' : 'movimenti'}`);
+  if (applied.trading) lines.push(`• 🏷️ Compravendita: ${applied.trading} ${applied.trading === 1 ? 'articolo' : 'articoli'}`);
+  if (applied.todos) lines.push(`• 📋 To-do: ${applied.todos}`);
+  if (applied.appointments) lines.push(`• 📅 Agenda: ${applied.appointments}`);
+  if (applied.clientsPending) lines.push(`• 👤 ${applied.clientsPending} nuovo/i cliente/i da confermare nell’app`);
+  if (lines.length === 1) lines.push('• 🧠 Nessuna azione operativa: note conservate come contesto.');
+
+  return { ok: true, intent: 'digest', notesCount: processed, applied, result, replyText: lines.join('\n') };
+}
+
+/**
  * Classifica ed elabora un messaggio Telegram in arrivo:
  * - Caso A: Body & Allenamenti (scrittura diretta in body_daily_logs e body_workout_entries)
  * - Caso B: Nuovo Macro-Dominio / Entità Aperta -> 4° Livello di Protezione (crea record in telegram_pending_actions con Inline Keyboard)
@@ -198,6 +261,25 @@ export function processIncomingTelegramMessage({
 
   const clean = String(text || '').trim();
   const lower = clean.toLowerCase();
+
+  // 1b. Comandi Coda Appunti (/queue <testo>, /digest)
+  const command = parseTelegramCommand(clean);
+  if (command?.name === 'queue') {
+    return handleQueueCommand(command.args);
+  }
+  if (command?.name === 'digest') {
+    // L'elaborazione richiede la chiamata IA (asincrona): il chiamante esegue `run()` e invia il replyText finale.
+    const pending = store.getQueuedNotes();
+    return {
+      ok: true,
+      intent: 'digest',
+      notesCount: pending.length,
+      replyText: pending.length === 0
+        ? '📭 La coda appunti è vuota. Aggiungi note con /queue <testo>.'
+        : `⚙️ Elaboro ${pending.length} ${pending.length === 1 ? 'nota' : 'note'} in un’unica passata…`,
+      run: () => processTelegramDigest(),
+    };
+  }
 
   // 2. Verifica segnali Body & Allenamento (notazione 20(10,10,10,10), peso, kcal, sonno)
   const weightMatch =

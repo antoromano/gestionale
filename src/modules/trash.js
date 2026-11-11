@@ -13,6 +13,8 @@ export function renderTrash(container, router) {
     todos: 'To-do',
     appointments: 'Appuntamento / Shooting',
     expenses: 'Spesa',
+    finance_transactions: 'Transazione Finanziaria',
+    trading_items: 'Articolo Compravendita',
     services_catalog: 'Servizio Catalogo',
     payments: 'Pagamento',
   };

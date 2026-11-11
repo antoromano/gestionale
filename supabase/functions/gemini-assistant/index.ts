@@ -17,7 +17,25 @@ interface RequestPayload {
   existingClients?: Array<{ id: string; name: string }>;
   currentDateIso?: string;
   timezone?: string;
+  // Profili specializzati (Agent Personas) inviati dal client: vedi AI_PROFILES in src/services/ai.js
+  profile?: string;
+  personaInstruction?: string;
+  secondBrainContext?: string;
+  activeModule?: string | null;
+  temperature?: number;
 }
+
+const KNOWN_PROFILES = ["ingestion_batch", "devils_advocate", "nutrition_fitness", "finance_coach", "general_brain"];
+
+// Campi opzionali oltre a todos/appointments, allineati alla chiamata diretta a Gemini del client
+const EXTENDED_SCHEMA = `
+CAMPI OPZIONALI AGGIUNTIVI NELLA RISPOSTA JSON (inclusi solo se pertinenti):
+  "clients_to_create": [{ "company_name": "", "first_name": "", "last_name": "", "email": "", "phone": "", "staging_url": "", "production_url": "", "github_repo": "", "stack": "", "maintenance_amount": 0, "maintenance_frequency": "monthly|quarterly|annual", "notes": "" }],
+  "body_log": { "date": "YYYY-MM-DD", "sleep_hours": null, "body_weight_kg": null, "calories_kcal": null, "protein_g": null, "carbs_g": null, "fat_g": null, "workout_entries": [{ "column_slug": "pull_up|dips|push_up|lunges|squat_sissy|hamstrings|deadlift|cardio_sport", "column_name": "", "raw_notation": "" }] },
+  "finance_transactions": [{ "type": "income|expense", "amount": 0, "description": "", "category": "", "date": "YYYY-MM-DD", "client_id": null, "payment_method": "bonifico|carta|contanti|paypal|addebito|altro" }],
+  "trading_items": [{ "title": "", "platform": "Vinted|Subito|eBay|Altro", "purchase_price": 0, "extra_costs": 0, "platform_fees": 0, "sale_price": null, "status": "in_stock|reserved|sold" }],
+  "critique": { "verdict": "", "risks": [""], "recommendations": [""], "buffer_percent": { "min": 0, "max": 0 }, "hourly_profit": null }
+`;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -43,7 +61,20 @@ serve(async (req) => {
       existingClients = [],
       currentDateIso = new Date().toISOString(),
       timezone = "Europe/Rome",
+      profile,
+      personaInstruction = "",
+      secondBrainContext = "",
+      activeModule = null,
+      temperature = 0.1,
     } = body;
+
+    const personaBlock = profile && KNOWN_PROFILES.includes(profile) && personaInstruction
+      ? `\n=== PROFILO ATTIVO: ${profile} ===\n${String(personaInstruction).slice(0, 8000)}\n`
+      : "";
+    const brainBlock = secondBrainContext
+      ? `\nContesto Second Brain (Fatti Mem0, Memorie Semantiche e Knowledge Graph):\n${String(secondBrainContext).slice(0, 8000)}\n`
+      : "";
+    const safeTemperature = Math.min(Math.max(Number(temperature) || 0.1, 0), 1);
 
     const clientsListStr = existingClients.length > 0
       ? existingClients.map((c) => `- ID: "${c.id}", Nome: "${c.name}"`).join("\n")
@@ -55,9 +86,10 @@ Sei l'assistente operativo per un gestionale professionale. Il tuo compito è es
 Data corrente di riferimento: ${currentDateIso}
 Fuso orario dell'utente: ${timezone}
 
+Modulo attivo nell'app: ${activeModule || "n.d."}
 Clienti attualmente presenti nel gestionale:
 ${clientsListStr}
-
+${brainBlock}
 REGOLE CRUCIALI:
 1. RICONOSCIMENTO MULTIPLO: Se il messaggio contiene più azioni o richieste (es. "Devo attivare un abbonamento per lavorare, fare le foto prodotti per Cliente A e preparare i contenuti per Cliente B"), genera PROPOSTE DISTINTE per ciascuna.
 2. NON INVENTARE CLIENTI: Non trasformare mai il nome di un servizio o di un'azione in un cliente (es. "attivare un abbonamento" non ha cliente, client_id deve essere null o vuoto). Associa a un cliente esistente SOLO se il nome o un chiaro riferimento corrisponde a uno dei clienti in elenco. Se il cliente non esiste o è ambiguo, imposta client_name_proposed con il nome rilevato e client_id = null.
@@ -97,7 +129,7 @@ REGOLE CRUCIALI:
     }
   ]
 }
-`;
+${EXTENDED_SCHEMA}${personaBlock}`;
 
     // Costruzione delle parti per Gemini 2.5 Flash / 1.5 Flash
     const contents: any[] = [];
@@ -132,7 +164,7 @@ REGOLE CRUCIALI:
       body: JSON.stringify({
         contents,
         generationConfig: {
-          temperature: 0.1,
+          temperature: safeTemperature,
           responseMimeType: "application/json",
         },
       }),

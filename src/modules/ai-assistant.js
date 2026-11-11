@@ -2,15 +2,45 @@
 // Modal Assistente IA: Input multimodale (Testo, Foto, Audio/Vocale), Riconoscimento intelligente, Disambiguazione e Conferma
 
 import { store } from '../services/store.js';
-import { processAiPrompt } from '../services/ai.js';
+import { processAiPrompt, processNoteQueueBatch, selectAiProfile, AI_PROFILES } from '../services/ai.js';
 import { ingestKnowledge, BRAIN_DOMAINS } from '../services/brain.js';
-import { formatCurrency, formatDateTime } from '../utils/formatters.js';
+import { formatCurrency, formatDateTime, escapeHtml } from '../utils/formatters.js';
 import { parseWorkoutNotation } from '../utils/body-parser.js';
 import { mountNeuralOrb3D } from '../utils/three-scenes.js';
+import { renderNoteQueueBox } from './note-queue-ui.js';
+import { showToast } from '../utils/toast.js';
+import { EXPENSE_CATEGORIES, INCOME_CATEGORIES, TRADING_PLATFORMS } from '../services/finances.js';
+
+const DEVIL_PREF_KEY = 'gestionale_ai_devils_advocate_v1';
+
+function readDevilsPref() {
+  try {
+    return localStorage.getItem(DEVIL_PREF_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeDevilsPref(on) {
+  try {
+    localStorage.setItem(DEVIL_PREF_KEY, on ? '1' : '0');
+  } catch {
+    /* preferenza non persistita */
+  }
+}
+
+const SOURCE_LABELS = {
+  edge_function: 'Edge Function Supabase',
+  gemini_direct: 'Gemini',
+  local_heuristic: 'motore locale (0 token)',
+};
 
 export function openAiModal(options = {}) {
-  const { preselectedClientId = null, onSaved = null } = options;
+  const { preselectedClientId = null, onSaved = null, autoProcessQueue = false } = options;
+  const activeModule = options.activeModule || (typeof window !== 'undefined' ? window.appRouter?.currentRoute : null) || null;
   const clients = store.getAll('clients');
+  let devilsMode = readDevilsPref();
+  let batchContext = null; // { noteIds, rawText, count, source } quando si elabora la Coda Appunti
 
   const preselectedClient = preselectedClientId ? store.getById('clients', preselectedClientId) : null;
   const preselectedName = preselectedClient ? (preselectedClient.company_name || `${preselectedClient.first_name} ${preselectedClient.last_name}`) : '';
@@ -18,22 +48,28 @@ export function openAiModal(options = {}) {
   const modalHtml = `
     <div class="modal-overlay" id="ai-assistant-overlay">
       <div class="modal-dialog modal-lg" style="max-height: 92vh;">
-        <div class="modal-header" style="background: #09090b; color: #ffffff; border-bottom: 1px solid #27272a;">
-          <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="modal-header ai-modal-header" style="background: #09090b; color: #ffffff; border-bottom: 1px solid #27272a;">
+          <div class="ai-header-title">
             <div id="ai-modal-orb-canvas" title="Nucleo Cognitivo 3D Interattivo (Three.js)" style="width: 44px; height: 44px; border-radius: 10px; background: #18181b; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(99,102,241,0.35);"></div>
             <div>
               <div class="modal-title" style="color: #ffffff; letter-spacing: -0.02em;">Assistente Operativo IA & Second Brain</div>
-              <div style="font-size: 11px; color: #a1a1aa;">
+              <div id="ai-modal-subtitle" style="font-size: 11px; color: #a1a1aa;">
                 ${preselectedName ? `Contesto cliente attivo: <strong>${preselectedName}</strong>` : 'Analizza testo, foto o note vocali ed estrae To-do, Eventi, Body Log e Fatti Mem0'}
               </div>
             </div>
           </div>
-          <button type="button" class="btn btn-sm btn-secondary" id="close-ai-modal-btn" style="background: rgba(255,255,255,0.1); color: #fff; border: none;">✕</button>
+          <div class="persona-toggle" role="group" aria-label="Persona dell'assistente">
+            <button type="button" class="persona-btn" data-persona="constructive" aria-pressed="${!devilsMode}">🤝 Assistente Costruttivo</button>
+            <button type="button" class="persona-btn devil" data-persona="devil" aria-pressed="${devilsMode}">😈 Avvocato del Diavolo</button>
+          </div>
+          <button type="button" class="btn btn-sm btn-secondary" id="close-ai-modal-btn" aria-label="Chiudi" style="background: rgba(255,255,255,0.1); color: #fff; border: none;">✕</button>
         </div>
 
         <div class="modal-body" style="padding: 20px; overflow-y: auto;">
           <!-- 1. AREA INPUT RICHIESTA -->
           <div id="ai-input-section">
+            <div id="ai-persona-banner"></div>
+            <div id="ai-queue-host"></div>
             <div class="form-group">
               <label class="form-label">Descrivi cosa devi fare o fornisci note su clienti/lavori:</label>
               <textarea
@@ -91,8 +127,8 @@ export function openAiModal(options = {}) {
           <!-- 2. STATO CARICAMENTO ED ELABORAZIONE -->
           <div id="ai-loading-section" style="display: none; text-align: center; padding: 40px;">
             <div style="font-size: 32px; margin-bottom: 12px; animation: pulse 1.5s infinite;">✨</div>
-            <div style="font-size: 15px; font-weight: 700; color: var(--text-main); margin-bottom: 6px;">Analisi in corso...</div>
-            <div style="font-size: 12px; color: var(--text-muted);">Estrazione to-do, appuntamenti e corrispondenze clienti</div>
+            <div id="ai-loading-title" style="font-size: 15px; font-weight: 700; color: var(--text-main); margin-bottom: 6px;">Analisi in corso...</div>
+            <div id="ai-loading-detail" style="font-size: 12px; color: var(--text-muted);">Estrazione to-do, appuntamenti e corrispondenze clienti</div>
           </div>
 
           <!-- 3. AREA ANTEPRIMA PROPOSTE & CONFERMA -->
@@ -103,6 +139,12 @@ export function openAiModal(options = {}) {
                 Controlla o modifica le proposte prima di salvare. Nessun record verrà creato senza la tua conferma.
               </div>
             </div>
+
+ <!-- Elaborazione batch della Coda Appunti -->
+            <div id="ai-batch-banner" style="display: none;"></div>
+
+            <!-- Critica Avvocato del Diavolo -->
+            <div id="ai-critique-section" style="display: none;"></div>
 
             <!-- Contesto Second Brain Iniettato -->
             <div id="ai-brain-context-box" style="display: none; padding: 10px 12px; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: var(--radius); margin-bottom: 16px; font-size: 11px; color: #5b21b6;"></div>
@@ -123,6 +165,24 @@ export function openAiModal(options = {}) {
                 <span class="badge badge-green">Body + Second Brain</span>
               </div>
               <div id="ai-body-container"></div>
+            </div>
+
+            <!-- Proposte Finanze (Entrate / Uscite) -->
+            <div id="ai-finance-section" style="margin-bottom: 20px; display: none;">
+              <div style="font-weight: 700; font-size: 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                <span>💶 Movimenti Finanziari Rilevati</span>
+                <span id="ai-finance-count" class="badge badge-green">0</span>
+              </div>
+              <div id="ai-finance-container" style="display: flex; flex-direction: column; gap: 10px;"></div>
+            </div>
+
+            <!-- Proposte Compravendita -->
+            <div id="ai-trading-section" style="margin-bottom: 20px; display: none;">
+              <div style="font-weight: 700; font-size: 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                <span>🏷️ Articoli Compravendita Rilevati</span>
+                <span id="ai-trading-count" class="badge badge-blue">0</span>
+              </div>
+              <div id="ai-trading-container" style="display: flex; flex-direction: column; gap: 10px;"></div>
             </div>
 
             <!-- Proposte To-do -->
@@ -171,6 +231,51 @@ export function openAiModal(options = {}) {
   const retryBtn = div.querySelector('#ai-retry-btn');
   const confirmBtn = div.querySelector('#ai-confirm-save-btn');
   const textInput = div.querySelector('#ai-text-input');
+
+  const defaultPlaceholder = textInput?.placeholder || '';
+  const defaultSubtitle = div.querySelector('#ai-modal-subtitle')?.innerHTML || '';
+  const processBtn = div.querySelector('#ai-process-btn');
+  const brainOnlyBtn = div.querySelector('#ai-save-brain-only-btn');
+
+  // --- Persona: Assistente Costruttivo | Avvocato del Diavolo ---
+  function applyPersonaUi() {
+    const profileId = selectAiProfile({ devilsAdvocate: devilsMode, activeModule });
+    const profile = AI_PROFILES[profileId];
+    div.querySelectorAll('.persona-btn').forEach(btn => {
+      const active = (btn.dataset.persona === 'devil') === devilsMode;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+
+    const banner = div.querySelector('#ai-persona-banner');
+    if (banner) {
+      banner.innerHTML = devilsMode
+        ? `<div class="persona-banner devil"><span style="font-size: 18px;">😈</span><div><strong>Modalità Avvocato del Diavolo attiva.</strong> Sottopongo a stress-test preventivi (scadenze, revisioni, buffer +25-35%), margini di compravendita (profitto orario reale vs tariffa dev) e carichi di allenamento (sonno + recupero). Non creo to-do né eventi.</div></div>`
+        : `<div class="persona-banner"><span style="font-size: 18px;">${profile.icon}</span><div><strong>Profilo attivo: ${profile.label}</strong> — selezionato in automatico${activeModule ? ` dal modulo “${escapeHtml(activeModule)}”` : ''}. ${profile.description}</div></div>`;
+    }
+
+    if (textInput) {
+      textInput.placeholder = devilsMode
+        ? 'Es: Preventivo e-commerce a 3000€ da consegnare in 10 giorni, revisioni a volontà. Conviene? / Ho venduto 3 articoli su Vinted questa settimana, ne vale la pena?'
+        : defaultPlaceholder;
+    }
+    if (processBtn) processBtn.innerHTML = devilsMode ? '😈 Metti alla prova' : '⚡ Elabora con l\'IA';
+    if (brainOnlyBtn) brainOnlyBtn.style.display = devilsMode ? 'none' : '';
+    const subtitleEl = div.querySelector('#ai-modal-subtitle');
+    if (subtitleEl) {
+      subtitleEl.innerHTML = devilsMode ? 'Socio critico: contesta le tue assunzioni con numeri reali' : defaultSubtitle;
+    }
+  }
+
+  div.querySelectorAll('.persona-btn').forEach(btn => btn.addEventListener('click', () => {
+    devilsMode = btn.dataset.persona === 'devil';
+    writeDevilsPref(devilsMode);
+    applyPersonaUi();
+  }));
+  applyPersonaUi();
+
+  // --- Coda Appunti del Giorno (cassetto collassabile) ---
+  renderNoteQueueBox(div.querySelector('#ai-queue-host'), { onProcess: () => runQueueBatch() });
 
   let orbTypingTimer = null;
   textInput?.addEventListener('input', () => {
@@ -301,8 +406,11 @@ export function openAiModal(options = {}) {
       return;
     }
 
+    batchContext = null;
     inputSection.style.display = 'none';
     loadingSection.style.display = 'block';
+    div.querySelector('#ai-loading-title').textContent = devilsMode ? 'L’Avvocato del Diavolo sta cercando i punti deboli...' : 'Analisi in corso...';
+    div.querySelector('#ai-loading-detail').textContent = devilsMode ? 'Incrocio preventivi, margini di compravendita e dati di recupero' : 'Estrazione to-do, appuntamenti e corrispondenze clienti';
 
     try {
       const result = await processAiPrompt({
@@ -312,6 +420,8 @@ export function openAiModal(options = {}) {
         audioBase64: attachedAudioBase64,
         audioMimeType: attachedAudioMime,
         preselectedClientId,
+        devilsAdvocate: devilsMode,
+        activeModule,
       });
 
       currentParsedResult = result;
@@ -323,6 +433,36 @@ export function openAiModal(options = {}) {
     }
   });
 
+  // Elabora TUTTE le note in coda con UNA sola chiamata (profilo ingestion_batch)
+  async function runQueueBatch() {
+    const notes = store.getQueuedNotes();
+    if (notes.length === 0) {
+      showToast('La coda è vuota.', 'info');
+      return;
+    }
+    inputSection.style.display = 'none';
+    loadingSection.style.display = 'block';
+    div.querySelector('#ai-loading-title').textContent = `Elaboro ${notes.length} ${notes.length === 1 ? 'nota' : 'note'} in un’unica chiamata...`;
+    div.querySelector('#ai-loading-detail').textContent = 'Profilo Ingestion Batch: estrazione multi-intent compatta';
+
+    try {
+      const result = await processNoteQueueBatch(notes, { preselectedClientId, activeModule });
+      batchContext = {
+        noteIds: result.noteIds,
+        // Al Second Brain va il testo pulito delle note (senza l'intestazione del prompt batch)
+        rawText: notes.map(n => n.content).join('\n'),
+        count: notes.length,
+        source: result.source,
+      };
+      currentParsedResult = result;
+      displayResults(result);
+    } catch (err) {
+      alert('Errore durante l\'elaborazione della coda: ' + err.message);
+      inputSection.style.display = 'block';
+      loadingSection.style.display = 'none';
+    }
+  }
+
   function displayResults(data) {
     loadingSection.style.display = 'none';
     resultsSection.style.display = 'block';
@@ -332,6 +472,23 @@ export function openAiModal(options = {}) {
     div.querySelector('#ai-summary-text').textContent = data.summary || 'Proposte estratte con successo';
     div.querySelector('#ai-todos-count').textContent = (data.todos || []).length;
     div.querySelector('#ai-appts-count').textContent = (data.appointments || []).length;
+
+    renderBatchBanner(data);
+    renderCritique(data.critique);
+    renderFinanceProposals(data.finance_transactions || []);
+    renderTradingProposals(data.trading_items || []);
+
+    // Nessuna proposta da salvare (es. sola critica dell'Avvocato del Diavolo): il pulsante di salvataggio non serve
+    const proposalCount = (data.todos || []).length + (data.appointments || []).length + (data.clients_to_create || []).length
+      + (data.finance_transactions || []).length + (data.trading_items || []).length + (data.body_log ? 1 : 0);
+    const critiqueOnly = proposalCount === 0 && Boolean(data.critique);
+    confirmBtn.style.display = critiqueOnly ? 'none' : 'inline-block';
+    const hintEl = div.querySelector('#ai-summary-text')?.nextElementSibling;
+    if (hintEl) {
+      hintEl.textContent = critiqueOnly
+        ? 'Analisi basata sui tuoi dati reali (preventivi, compravendita, Body). Nessun record viene creato.'
+        : 'Controlla o modifica le proposte prima di salvare. Nessun record verrà creato senza la tua conferma.';
+    }
 
     const brainBox = div.querySelector('#ai-brain-context-box');
     if (brainBox && data.brainContext) {
@@ -583,8 +740,137 @@ export function openAiModal(options = {}) {
     }
   }
 
+  function renderBatchBanner(data) {
+    const el = div.querySelector('#ai-batch-banner');
+    if (!el) return;
+    if (!batchContext) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'block';
+    el.innerHTML = `<div class="persona-banner" style="margin-bottom: 14px;"><span style="font-size: 18px;">⚡</span><div><strong>${batchContext.count} ${batchContext.count === 1 ? 'nota elaborata' : 'note elaborate'} in 1 chiamata</strong> · profilo Ingestion Batch · ${escapeHtml(SOURCE_LABELS[batchContext.source] || batchContext.source || '')}. Le note restano in coda finché non confermi il salvataggio.</div></div>`;
+  }
+
+  function renderCritique(critique) {
+    const el = div.querySelector('#ai-critique-section');
+    if (!el) return;
+    if (!critique) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    const buffer = critique.buffer_percent && critique.buffer_percent.min != null
+      ? `<span class="badge badge-yellow">Buffer rischio +${critique.buffer_percent.min}-${critique.buffer_percent.max}%</span>` : '';
+    const hourly = critique.hourly_profit != null
+      ? `<span class="badge badge-red">Profitto orario reale ${formatCurrency(critique.hourly_profit)}/h</span>` : '';
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div class="critique-card">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap;">
+          <div style="font-weight: 700; font-size: 14px;">😈 ${escapeHtml(critique.verdict || 'Analisi critica')}</div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">${buffer}${hourly}</div>
+        </div>
+        ${(critique.risks || []).length > 0 ? `<h4>Rischi individuati</h4><ul>${critique.risks.map(r => `<li>⚠️ ${escapeHtml(r)}</li>`).join('')}</ul>` : ''}
+        ${(critique.recommendations || []).length > 0 ? `<h4>Cosa fare invece</h4><ul>${critique.recommendations.map(r => `<li>✅ ${escapeHtml(r)}</li>`).join('')}</ul>` : ''}
+      </div>`;
+  }
+
+  function renderFinanceProposals(items) {
+    const section = div.querySelector('#ai-finance-section');
+    const container = div.querySelector('#ai-finance-container');
+    div.querySelector('#ai-finance-count').textContent = items.length;
+    if (!section || !container) return;
+    if (items.length === 0) {
+      section.style.display = 'none';
+      container.innerHTML = '';
+      return;
+    }
+    section.style.display = 'block';
+    container.innerHTML = `
+      <datalist id="ai-fin-cat-list">${[...new Set([...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES])].map(c => `<option value="${escapeHtml(c)}"></option>`).join('')}</datalist>
+      ${items.map((t, idx) => `
+        <div class="card ai-fin-card" style="padding: 12px; margin-bottom: 0; border: 1px solid ${t.type === 'income' ? '#bbf7d0' : '#fecaca'};">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; font-weight: 700;">
+              <input type="checkbox" class="ai-include-fin" data-idx="${idx}" checked />
+              Registra movimento #${idx + 1}
+            </label>
+            <span class="badge ${t.type === 'income' ? 'badge-green' : 'badge-red'}">${t.type === 'income' ? 'Entrata' : 'Uscita'}</span>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="flex: 3;">
+              <label class="form-label">Descrizione</label>
+              <input type="text" class="form-input ai-fin-desc" data-idx="${idx}" value="${escapeHtml(t.description)}" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Tipo</label>
+              <select class="form-select ai-fin-type" data-idx="${idx}">
+                <option value="expense" ${t.type === 'expense' ? 'selected' : ''}>Uscita</option>
+                <option value="income" ${t.type === 'income' ? 'selected' : ''}>Entrata</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Importo (€)</label>
+              <input type="number" step="0.01" min="0" class="form-input ai-fin-amt" data-idx="${idx}" value="${t.amount}" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label">Categoria</label>
+              <input type="text" list="ai-fin-cat-list" class="form-input ai-fin-cat" data-idx="${idx}" value="${escapeHtml(t.category)}" />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">Data</label>
+              <input type="date" class="form-input ai-fin-date" data-idx="${idx}" value="${escapeHtml(t.date)}" />
+            </div>
+          </div>
+        </div>`).join('')}`;
+  }
+
+  function renderTradingProposals(items) {
+    const section = div.querySelector('#ai-trading-section');
+    const container = div.querySelector('#ai-trading-container');
+    div.querySelector('#ai-trading-count').textContent = items.length;
+    if (!section || !container) return;
+    if (items.length === 0) {
+      section.style.display = 'none';
+      container.innerHTML = '';
+      return;
+    }
+    section.style.display = 'block';
+    container.innerHTML = items.map((t, idx) => `
+      <div class="card ai-trade-card" style="padding: 12px; margin-bottom: 0; border: 1px solid #bfdbfe;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <label style="display: flex; align-items: center; gap: 8px; font-weight: 700;">
+            <input type="checkbox" class="ai-include-trade" data-idx="${idx}" checked />
+            Aggiungi articolo #${idx + 1}
+          </label>
+          <span class="badge badge-blue">${t.status === 'sold' ? 'Venduto' : 'In vendita'}</span>
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex: 3;">
+            <label class="form-label">Oggetto</label>
+            <input type="text" class="form-input ai-trade-title" data-idx="${idx}" value="${escapeHtml(t.title)}" />
+          </div>
+          <div class="form-group" style="flex: 1;">
+            <label class="form-label">Piattaforma</label>
+            <select class="form-select ai-trade-platform" data-idx="${idx}">
+              ${TRADING_PLATFORMS.map(p => `<option value="${p}" ${t.platform === p ? 'selected' : ''}>${p}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Acquisto (€)</label><input type="number" step="0.01" min="0" class="form-input ai-trade-purchase" data-idx="${idx}" value="${t.purchase_price}" /></div>
+          <div class="form-group"><label class="form-label">Extra (€)</label><input type="number" step="0.01" min="0" class="form-input ai-trade-extra" data-idx="${idx}" value="${t.extra_costs || 0}" /></div>
+          <div class="form-group"><label class="form-label">Commissioni (€)</label><input type="number" step="0.01" min="0" class="form-input ai-trade-fees" data-idx="${idx}" value="${t.platform_fees || 0}" /></div>
+          <div class="form-group"><label class="form-label">Vendita (€)</label><input type="number" step="0.01" min="0" class="form-input ai-trade-sale" data-idx="${idx}" value="${t.sale_price ?? ''}" placeholder="non venduto" /></div>
+        </div>
+      </div>`).join('');
+  }
+
   // Riprova
   retryBtn.addEventListener('click', () => {
+    batchContext = null;
     resultsSection.style.display = 'none';
     retryBtn.style.display = 'none';
     confirmBtn.style.display = 'none';
@@ -598,6 +884,8 @@ export function openAiModal(options = {}) {
     let createdClientsCount = 0;
     let createdTodosCount = 0;
     let createdApptsCount = 0;
+    let createdFinanceCount = 0;
+    let createdTradingCount = 0;
     let savedBodyLog = false;
     let savedToBrain = false;
     const clientNameToIdMap = {};
@@ -642,7 +930,7 @@ export function openAiModal(options = {}) {
 
     const shouldSaveToBrain = div.querySelector('#ai-save-to-brain')?.checked;
     const brainDomain = div.querySelector('#ai-brain-domain')?.value || 'work';
-    const rawPromptText = textInput.value.trim();
+    const rawPromptText = batchContext ? batchContext.rawText : textInput.value.trim();
 
     if (shouldSaveToBrain && rawPromptText) {
       try {
@@ -655,6 +943,51 @@ export function openAiModal(options = {}) {
       } catch (err) {
         console.warn('Errore salvataggio automatico Second Brain:', err);
       }
+    }
+
+    // 0b. Salva movimenti finanziari e articoli di compravendita confermati (scrittura batch)
+    const financeToCreate = [];
+    div.querySelectorAll('.ai-include-fin:checked').forEach(cb => {
+      const idx = cb.dataset.idx;
+      const description = div.querySelector(`.ai-fin-desc[data-idx="${idx}"]`).value.trim();
+      const amount = parseFloat(div.querySelector(`.ai-fin-amt[data-idx="${idx}"]`).value);
+      if (!description || !(amount > 0)) return;
+      const raw = (currentParsedResult.finance_transactions || [])[idx] || {};
+      financeToCreate.push({
+        type: div.querySelector(`.ai-fin-type[data-idx="${idx}"]`).value,
+        description,
+        amount,
+        category: div.querySelector(`.ai-fin-cat[data-idx="${idx}"]`).value.trim() || 'generale',
+        date: div.querySelector(`.ai-fin-date[data-idx="${idx}"]`).value,
+        payment_method: raw.payment_method || 'bonifico',
+        client_id: raw.client_id || null,
+      });
+    });
+    if (financeToCreate.length > 0) {
+      createdFinanceCount = store.createBatch('finance_transactions', financeToCreate).length;
+    }
+
+    const tradingToCreate = [];
+    div.querySelectorAll('.ai-include-trade:checked').forEach(cb => {
+      const idx = cb.dataset.idx;
+      const title = div.querySelector(`.ai-trade-title[data-idx="${idx}"]`).value.trim();
+      const purchase = parseFloat(div.querySelector(`.ai-trade-purchase[data-idx="${idx}"]`).value);
+      if (!title || !(purchase >= 0)) return;
+      const saleRaw = div.querySelector(`.ai-trade-sale[data-idx="${idx}"]`).value;
+      const raw = (currentParsedResult.trading_items || [])[idx] || {};
+      tradingToCreate.push({
+        title,
+        platform: div.querySelector(`.ai-trade-platform[data-idx="${idx}"]`).value,
+        purchase_price: purchase,
+        extra_costs: parseFloat(div.querySelector(`.ai-trade-extra[data-idx="${idx}"]`).value) || 0,
+        platform_fees: parseFloat(div.querySelector(`.ai-trade-fees[data-idx="${idx}"]`).value) || 0,
+        sale_price: saleRaw === '' ? null : parseFloat(saleRaw),
+        purchase_date: raw.purchase_date,
+        notes: raw.notes || '',
+      });
+    });
+    if (tradingToCreate.length > 0) {
+      createdTradingCount = store.createBatch('trading_items', tradingToCreate).length;
     }
 
     // 1. Salva nuovi clienti confermati (Onboarding)
@@ -771,12 +1104,22 @@ export function openAiModal(options = {}) {
 
     const parts = [];
     if (savedBodyLog) parts.push('Diario Body registrato');
+    if (createdFinanceCount > 0) parts.push(`${createdFinanceCount} Movimenti finanziari`);
+    if (createdTradingCount > 0) parts.push(`${createdTradingCount} Articoli compravendita`);
     if (createdClientsCount > 0) parts.push(`${createdClientsCount} Clienti acquisiti`);
     if (createdTodosCount > 0) parts.push(`${createdTodosCount} To-do creati`);
     if (createdApptsCount > 0) parts.push(`${createdApptsCount} Eventi in agenda`);
     if (savedToBrain) parts.push('Conoscenza salvata nel Second Brain');
 
-    alert(`Operazione completata: ${parts.join(', ') || 'Nessun elemento selezionato'}.`);
+    // La coda viene svuotata solo dopo la conferma: chiudendo senza salvare le note restano disponibili
+    if (batchContext) {
+      store.markNotesProcessed(batchContext.noteIds);
+      parts.push(`${batchContext.count} note della coda elaborate`);
+      batchContext = null;
+    }
+
+    showToast(`Operazione completata: ${parts.join(', ') || 'Nessun elemento selezionato'}.`, 'success', 5200);
+    modalOrbInstance?.destroy?.();
     div.remove();
     if (onSaved) onSaved();
   });
@@ -799,4 +1142,8 @@ export function openAiModal(options = {}) {
     }
     mouseDownOnBackdrop = false;
   });
+
+  if (autoProcessQueue) {
+    setTimeout(() => runQueueBatch(), 0);
+  }
 }

@@ -48,6 +48,9 @@ export const defaultSettings = {
   github_token: '',
   supabase_url: '',
   supabase_anon_key: '',
+  telegram_bot_token: '',
+  telegram_allowed_user_id: '',
+  telegram_connected: false,
 };
 
 class Store {
@@ -72,6 +75,8 @@ class Store {
       body_exercise_columns: [],
       body_daily_logs: [],
       body_workout_entries: [],
+      telegram_pending_actions: [],
+      telegram_bot_subscribers: [],
     };
     this.listeners = new Set();
     this.entityHooks = new Set();

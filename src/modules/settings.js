@@ -2,9 +2,15 @@
 // Gestione Impostazioni: Personalizzazione Brand, Dati Fiscali, Condizioni, Integrazioni e Dati Demo
 
 import { store, defaultSettings } from '../services/store.js';
+import {
+  getTelegramIntegrationStatus,
+  sendTelegramTestMessage,
+  registerTelegramWebhook,
+} from '../services/telegram.js';
 
 export function renderSettings(container, router) {
   const settings = store.getSettings();
+  const tgStatus = getTelegramIntegrationStatus();
 
   container.innerHTML = `
     <div style="max-width: 900px; margin: 0 auto;">
@@ -259,6 +265,76 @@ export function renderSettings(container, router) {
           </div>
         </div>
 
+        <!-- 4B. INTEGRAZIONE TELEGRAM BOT (MULTIMODAL + 4° LIVELLO DI PROTEZIONE) -->
+        <div class="card" id="telegram-integration-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">🤖 Integrazione Telegram Bot (Second Brain & Body Proattivo)</div>
+              <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">
+                Note vocali (.ogg), foto, log rapido Body (<code>20(10,10,10,10)</code>) e 4° Livello di Protezione con Inline Keyboard per nuovi macro-domini
+              </div>
+            </div>
+            <span id="telegram-status-badge" class="badge ${tgStatus.isConfigured ? 'badge-green' : 'badge-gray'}">
+              ${tgStatus.isConfigured ? '● Attivo e Connesso' : 'Da configurare'}
+            </span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Webhook URL Supabase Edge Function (da impostare su Telegram)</label>
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <input
+                type="text"
+                id="telegram-webhook-url-display"
+                class="form-input mono"
+                readonly
+                value="${tgStatus.webhookUrl}"
+                style="background: #fafafa; color: var(--text-main); flex: 1;"
+              />
+              <button type="button" id="copy-tg-webhook-btn" class="btn btn-sm btn-secondary">
+                Copia URL
+              </button>
+              <button type="button" id="register-tg-webhook-btn" class="btn btn-sm btn-secondary" title="Chiama setWebhook sulle API di Telegram">
+                🔗 Collega Webhook
+              </button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="flex: 1.5;">
+              <label class="form-label">TELEGRAM_BOT_TOKEN (da @BotFather o Supabase Secrets)</label>
+              <input
+                type="password"
+                id="set-telegram-bot-token"
+                class="form-input mono"
+                value="${settings.telegram_bot_token || ''}"
+                placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
+              />
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label">TELEGRAM_ALLOWED_USER_ID (Tuo ID Telegram)</label>
+              <input
+                type="text"
+                id="set-telegram-user-id"
+                class="form-input mono"
+                value="${settings.telegram_allowed_user_id || ''}"
+                placeholder="es. 123456789"
+              />
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border);">
+            <div style="font-size: 11px; color: var(--text-muted);">
+              Cron Proattività: <code class="mono">?action=morning_brief</code> (08:30) • <code class="mono">?action=evening_check</code> (21:30)
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span id="telegram-test-feedback" style="font-size: 12px; font-weight: 600;"></span>
+              <button type="button" id="telegram-test-msg-btn" class="btn btn-sm btn-primary">
+                ✈️ Invia messaggio di test
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div style="display: flex; justify-content: flex-end; gap: 12px; margin-bottom: 30px;">
           <button type="submit" class="btn btn-primary" style="padding: 10px 24px; font-size: 14px;">
             💾 Salva Impostazioni
@@ -358,9 +434,16 @@ export function renderSettings(container, router) {
       google_calendar_connected: container.querySelector('#set-gcal-connected').checked,
       notion_connected: container.querySelector('#set-notion-connected').checked,
       github_token: container.querySelector('#set-github-token').value.trim(),
+      telegram_bot_token: container.querySelector('#set-telegram-bot-token')?.value.trim() || '',
+      telegram_allowed_user_id: container.querySelector('#set-telegram-user-id')?.value.trim() || '',
+      telegram_connected: Boolean(
+        container.querySelector('#set-telegram-bot-token')?.value.trim() &&
+        container.querySelector('#set-telegram-user-id')?.value.trim()
+      ),
     };
 
     store.updateSettings(updated);
+    renderSettings(container, router);
 
     // Aggiorna variabili CSS dinamiche
     document.documentElement.style.setProperty('--primary', updated.primary_color);
@@ -395,6 +478,72 @@ export function renderSettings(container, router) {
       store.clearAll();
       alert('Installazione ripristinata allo stato iniziale vergine.');
       location.reload();
+    }
+  });
+
+  // --- Eventi Card Integrazione Telegram Bot ---
+  container.querySelector('#copy-tg-webhook-btn')?.addEventListener('click', () => {
+    const urlInput = container.querySelector('#telegram-webhook-url-display');
+    if (urlInput && navigator.clipboard) {
+      navigator.clipboard.writeText(urlInput.value);
+      const fb = container.querySelector('#telegram-test-feedback');
+      if (fb) {
+        fb.style.color = 'var(--success)';
+        fb.textContent = '✓ Webhook URL copiato!';
+      }
+    }
+  });
+
+  container.querySelector('#register-tg-webhook-btn')?.addEventListener('click', async () => {
+    const tokenVal = container.querySelector('#set-telegram-bot-token')?.value.trim() || '';
+    const fb = container.querySelector('#telegram-test-feedback');
+    try {
+      if (fb) {
+        fb.style.color = 'var(--text-muted)';
+        fb.textContent = 'Registrazione webhook in corso...';
+      }
+      await registerTelegramWebhook(tokenVal);
+      if (fb) {
+        fb.style.color = 'var(--success)';
+        fb.textContent = '✓ Webhook collegato a Telegram!';
+      }
+      const badge = container.querySelector('#telegram-status-badge');
+      if (badge) {
+        badge.className = 'badge badge-green';
+        badge.textContent = '● Attivo e Connesso';
+      }
+    } catch (err) {
+      if (fb) {
+        fb.style.color = 'var(--danger)';
+        fb.textContent = err.message;
+      }
+    }
+  });
+
+  container.querySelector('#telegram-test-msg-btn')?.addEventListener('click', async () => {
+    const tokenVal = container.querySelector('#set-telegram-bot-token')?.value.trim() || '';
+    const chatIdVal = container.querySelector('#set-telegram-user-id')?.value.trim() || '';
+    const fb = container.querySelector('#telegram-test-feedback');
+    try {
+      if (fb) {
+        fb.style.color = 'var(--text-muted)';
+        fb.textContent = 'Invio messaggio di test...';
+      }
+      await sendTelegramTestMessage({ botToken: tokenVal, chatId: chatIdVal });
+      if (fb) {
+        fb.style.color = 'var(--success)';
+        fb.textContent = '✓ Messaggio di test inviato su Telegram!';
+      }
+      const badge = container.querySelector('#telegram-status-badge');
+      if (badge) {
+        badge.className = 'badge badge-green';
+        badge.textContent = '● Attivo e Connesso';
+      }
+    } catch (err) {
+      if (fb) {
+        fb.style.color = 'var(--danger)';
+        fb.textContent = err.message;
+      }
     }
   });
 }

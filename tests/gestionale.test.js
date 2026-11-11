@@ -28,6 +28,13 @@ import {
   calculateBodyTrends,
   DEFAULT_BODY_COLUMNS,
 } from '../src/utils/body-parser.js';
+import {
+  processIncomingTelegramMessage,
+  confirmTelegramPendingAction,
+  rejectTelegramPendingAction,
+  buildProactiveMessages,
+  getTelegramWebhookUrl,
+} from '../src/services/telegram.js';
 
 describe('1. Calcoli Economici Voci di Preventivo', () => {
   it('calcola correttamente il netto di una voce con quantità, prezzo e sconto', () => {
@@ -595,3 +602,103 @@ describe('10. Modulo Body: Parser Notazione, Semaforo 2-3gg, Media Mobile Peso &
     expect(edges.some(e => e.relation_type === 'PRATICA')).toBe(true);
   });
 });
+
+describe('11. Integrazione Telegram Bot & 4° Livello di Protezione (Human-in-the-Loop)', () => {
+  beforeEach(() => {
+    store.clearAll();
+    store.updateSettings({
+      telegram_bot_token: '123456:TEST_TOKEN',
+      telegram_allowed_user_id: '99887766',
+      telegram_connected: true,
+    });
+  });
+
+  it('1. blocca i messaggi provenienti da User ID non autorizzati nella whitelist (TELEGRAM_ALLOWED_USER_ID)', async () => {
+    const res = await processIncomingTelegramMessage({
+      chatId: 555555,
+      fromUserId: 111111, // diverso da 99887766
+      text: 'Trazioni 20(10,10,10,10)',
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.blocked).toBe(true);
+    expect(res.reason).toBe('unauthorized_user');
+  });
+
+  it('2. Caso A (Body Log & Workout): riconosce automaticamente sintassi 20(10,10,10,10), peso e calorie scrivendo direttamente in body_daily_logs e body_workout_entries', async () => {
+    const res = await processIncomingTelegramMessage({
+      chatId: 99887766,
+      fromUserId: 99887766,
+      text: 'Oggi peso 74.8kg, dormito 8 ore, 2450 kcal con 165g proteine. Trazioni 20(10,10,10,10) e Dips 25(8,8,8)',
+      mediaType: 'voice', // es. nota vocale trascritta
+      date: '2026-11-11',
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.intent).toBe('body_log');
+    expect(res.dailyLog.body_weight_kg).toBe(74.8);
+    expect(res.dailyLog.sleep_hours).toBe(8);
+    expect(res.dailyLog.calories_kcal).toBe(2450);
+    expect(res.workoutEntries.length).toBeGreaterThanOrEqual(2);
+    expect(res.replyText).toContain('Registrato in Sezione Body!');
+  });
+
+  it('3. Caso B (4° Livello di Protezione): per nuovi macro-domini (es. Cucina/Ricette) crea un record in telegram_pending_actions con Inline Keyboard e consolida nel Knowledge Graph solo al click di Conferma', async () => {
+    const nodesBefore = store.getAll('brain_nodes').length;
+
+    const res = await processIncomingTelegramMessage({
+      chatId: 99887766,
+      fromUserId: 99887766,
+      text: 'Ricetta Carbonara Perfetta: 4 tuorli, 200g guanciale croccante, 80g pecorino romano DOP e pepe nero in grani',
+      mediaType: 'text',
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.intent).toBe('new_open_domain');
+    expect(res.pendingAction).toBeDefined();
+    expect(res.pendingAction.status).toBe('pending');
+    expect(res.pendingAction.action_type).toBe('ingest_new_domain');
+
+    // Verifica presenza Inline Keyboard con callback_data confirm:<id> e reject:<id>
+    const buttons = res.inlineKeyboard[0];
+    expect(buttons[0].callback_data).toBe(`confirm:${res.pendingAction.id}`);
+    expect(buttons[1].callback_data).toBe(`reject:${res.pendingAction.id}`);
+
+    // Prima della conferma NON deve aver scritto alla cieca nel Knowledge Graph
+    expect(store.getAll('brain_nodes').length).toBe(nodesBefore);
+
+    // Simula il click dell'utente su [✅ Conferma e Salva]
+    const confirmed = await confirmTelegramPendingAction(res.pendingAction.id);
+    expect(confirmed.ok).toBe(true);
+    expect(confirmed.status).toBe('confirmed');
+    expect(confirmed.replyText).toContain('Salvato nel Second Brain!');
+
+    // Ora il nodo con dominio aperto ('cucina' / 'recipe') e la memoria con source_type = 'telegram' sono presenti
+    const allNodes = store.getAll('brain_nodes');
+    expect(allNodes.some(n => n.node_type === 'recipe' && n.label.toLowerCase().includes('carbonara'))).toBe(true);
+
+    const allMemories = store.getAll('brain_memories');
+    expect(allMemories.some(m => m.source_type === 'telegram' && m.domain === 'cucina')).toBe(true);
+
+    // Verifica anche il flusso di rifiuto [❌ Ignora] su una seconda azione pending
+    const resReject = await processIncomingTelegramMessage({
+      chatId: 99887766,
+      fromUserId: 99887766,
+      text: 'Investimento ETF S&P500: quota mensile PAC 500 euro su portafoglio azionario',
+    });
+    const rejected = rejectTelegramPendingAction(resReject.pendingAction.id);
+    expect(rejected.ok).toBe(true);
+    expect(rejected.status).toBe('rejected');
+  });
+
+  it('4. Proattività Scheduled (Morning Brief 08:30 & Evening Check 21:30) e URL Webhook Supabase', () => {
+    expect(getTelegramWebhookUrl()).toBe('https://hbyqofpkkenzgbggvlch.supabase.co/functions/v1/telegram-webhook');
+
+    // In una giornata senza calorie/sonno inseriti, l'Evening Check (21:30) deve attivare il promemoria
+    const proactive = buildProactiveMessages('2026-11-11');
+    expect(proactive.morningBriefText).toContain('Buongiorno Antonio!');
+    expect(proactive.needsEveningReminder).toBe(true);
+    expect(proactive.eveningReminderText).toContain('calorie o il sonno');
+  });
+});
+

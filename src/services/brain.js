@@ -17,6 +17,10 @@ export const BRAIN_DOMAINS = {
   body: { label: 'Body & Salute', icon: '🏋️', badge: 'badge-yellow' },
   personal: { label: 'Personale & Regole', icon: '🧭', badge: 'badge-gray' },
   idea: { label: 'Idee & Ricerca', icon: '💡', badge: 'badge-yellow' },
+  cucina: { label: 'Cucina & Ricette', icon: '🍳', badge: 'badge-yellow' },
+  finance: { label: 'Finanza & Asset', icon: '📈', badge: 'badge-green' },
+  auto: { label: 'Auto & Veicoli', icon: '🚗', badge: 'badge-gray' },
+  hobby: { label: 'Hobby & Interessi', icon: '🎯', badge: 'badge-blue' },
 };
 
 export const NODE_TYPE_META = {
@@ -28,6 +32,9 @@ export const NODE_TYPE_META = {
   biometric: { label: 'Biometria / Salute', icon: '❤️', color: '#dc2626', bg: '#fee2e2' },
   concept: { label: 'Concetto', icon: '🧠', color: '#475569', bg: '#f1f5f9' },
   issue: { label: 'Problema / Sintomo', icon: '⚠️', color: '#ea580c', bg: '#ffedd5' },
+  recipe: { label: 'Ricetta', icon: '🍳', color: '#d97706', bg: '#fef3c7' },
+  asset: { label: 'Asset / Finanza', icon: '📈', color: '#059669', bg: '#d1fae5' },
+  vehicle: { label: 'Veicolo', icon: '🚗', color: '#4f46e5', bg: '#e0e7ff' },
 };
 
 const KNOWN_TECHNOLOGIES = [
@@ -220,8 +227,7 @@ export function upsertFact({
   const cleanValue = String(fact_value).trim();
   if (!cleanSubject || !cleanKey || !cleanValue) return null;
 
-  const validCategories = ['preference', 'status', 'metric', 'rule', 'client_info'];
-  const resolvedCategory = validCategories.includes(category) ? category : 'status';
+  const resolvedCategory = category && String(category).trim().length > 0 ? String(category).trim() : 'status';
   const nowIso = new Date().toISOString();
 
   const allFacts = store.getAll('brain_facts', true);
@@ -751,9 +757,8 @@ export async function ingestKnowledge({
     throw new Error('Il contenuto da memorizzare nel Second Brain non può essere vuoto.');
   }
 
-  const validDomains = ['work', 'client', 'tech', 'body', 'personal', 'idea'];
-  const resolvedDomain = validDomains.includes(domain) ? domain : 'work';
-  const validSources = ['manual', 'ai_chat', 'client_event', 'todo', 'body_log'];
+  const resolvedDomain = domain && String(domain).trim().length > 0 ? String(domain).trim() : 'work';
+  const validSources = ['manual', 'ai_chat', 'client_event', 'todo', 'body_log', 'telegram'];
   const resolvedSource = validSources.includes(sourceType) ? sourceType : 'manual';
 
   // 1. Estrazione euristica locale (sempre eseguita come base deterministica)

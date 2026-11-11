@@ -45,3 +45,4 @@ export function icon(name, size = 16, className = '') {
   const path = SVG_PATHS[name] || SVG_PATHS.info;
   return `<svg class="ui-icon ${className}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0;vertical-align:middle;">${path}</svg>`;
 }
+

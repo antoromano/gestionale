@@ -85,46 +85,6 @@ function localDate(deps, unixSeconds, text = '') {
 // Estrazione Body a zero token (notazione 20(10,10,10), peso, kcal, sonno)
 // ---------------------------------------------------------------------------
 
-const EXERCISES = [
-  ['Pull Up', /(?:pull\s*[-_]?up|trazioni|dorso)\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/i],
-  ['Dips', /(?:dips?|parallele)\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/i],
-  ['Push Up', /(?:push\s*[-_]?up|piegamenti)\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/i],
-  ['Affondi', /(?:affondi|lunges?)\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/i],
-  ['Squat / Sissy', /(?:squat|sissy(?:\s+squat)?)\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/i],
-  ['Femo', /(?:femo(?:rali)?|leg\s+curl)\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/i],
-  ['Stacchi', /(?:stacchi|stacco|deadlift|rdl)\s*[:=-]?\s*((?:[^,.;\n()]|\([^)]*\))+)/i],
-];
-
-export function extractBodyHeuristic(text = '') {
-  const clean = String(text).trim();
-  const num = (re, i = 1) => { const m = clean.match(re); return m ? parseFloat(m[i].replace(',', '.')) : null; };
-  const weight = num(/(?:peso(?:\s+corporeo)?\s*[:=]?\s*|pesato\s+)(\d{2,3}(?:[.,]\d{1,2})?)\s*kg/i) ?? num(/\b(\d{2}(?:[.,]\d{1,2}))\s*kg\b/i);
-  const sleep = num(/(?:dormito|sonno)\s*[:=]?\s*(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:h|ore)?/i) ?? num(/\b(\d{1,2}(?:[.,]\d)?)\s*(?:h|ore)\s+di\s+sonno\b/i);
-  const kcal = num(/(\d{3,4})\s*kcal/i);
-  const protein = num(/(\d{2,3})\s*g?\s*(?:proteine|prot|pro)\b/i);
-  const carbs = num(/(\d{2,3})\s*g?\s*(?:carboidrati|carbo|cho)\b/i);
-  const fat = num(/(\d{1,3})\s*g?\s*(?:grassi|fat|lipidi)\b/i);
-
-  const workouts = [];
-  for (const [name, re] of EXERCISES) {
-    const m = clean.match(re);
-    if (m && m[1] && parseWorkoutNotation(m[1].trim(), 'pull').blocks.length > 0) {
-      workouts.push({ exercise_name: name, raw_notation: m[1].trim() });
-    }
-  }
-  const hasSignals = workouts.length > 0 || kcal !== null || sleep !== null || (weight !== null && (sleep !== null || kcal !== null));
-  if (!hasSignals) return null;
-  return { body_weight_kg: weight, sleep_hours: sleep, calories_kcal: kcal, protein_g: protein, carbs_g: carbs, fat_g: fat, workouts };
-}
-
-function guessDomain(text) {
-  const lower = text.toLowerCase();
-  if (/\b(ricetta|cucina|ingredienti|tuorli|guanciale|pecorino|cottura|pasta|carbonara|forno|grammi)\b/.test(lower)) return { domain: 'cucina', display: 'Cucina / Ricette', emoji: '🍳', nodeType: 'recipe' };
-  if (/\b(etf|azioni|portafoglio|investiment[oi]|finanza|crypto|bitcoin|dividendi|risparmio)\b/.test(lower)) return { domain: 'finance', display: 'Finanza & Asset', emoji: '📈', nodeType: 'asset' };
-  if (/\b(auto|macchina|tagliando|gomme|assicurazione|bollo|motore|revisione)\b/.test(lower)) return { domain: 'auto', display: 'Auto & Veicoli', emoji: '🚗', nodeType: 'vehicle' };
-  return { domain: 'general', display: 'Conoscenza Generale', emoji: '🧠', nodeType: 'concept' };
-}
-
 // ---------------------------------------------------------------------------
 // Scrittura nel database (verificata)
 // ---------------------------------------------------------------------------
@@ -304,11 +264,6 @@ async function extractWithAi(deps, notes, date, media = []) {
   return { extraction: data, model };
 }
 
-function aiUnavailableNote(err) {
-  if (err.code === 'no_api_key') return null; // IA non configurata: scelta, non guasto
-  return `⚠️ IA non disponibile (${esc(err.message)}). Ho usato regole semplici: controlla il risultato.`;
-}
-
 // ---------------------------------------------------------------------------
 // Risposte con pulsante Annulla
 // ---------------------------------------------------------------------------
@@ -448,8 +403,7 @@ async function handleMessage(deps, tg, msg) {
   }
   if (!text && media.length === 0) return ok({ ok: true, ignored: true });
 
-  // 1) IA (se configurata)
-  let notice = null;
+  // Solo IA: se non risponde, lo dico con il motivo e metto il messaggio da parte (mai perso, mai indovinato)
   try {
     const { extraction } = await extractWithAi(deps, [text || '(vedi allegato)'], date, media);
     const result = await applyExtraction(deps, owner, extraction, date);
@@ -465,26 +419,15 @@ async function handleMessage(deps, tg, msg) {
     return ok({ ok: true, intent: 'ai_extraction', saved: result.saved.length, failed: result.failed.length });
   } catch (err) {
     if (!(err instanceof Error && err.name === 'GeminiError')) throw err;
-    notice = aiUnavailableNote(err);
     if (media.length) {
-      await tg.send(chatId, `❌ Per vocali e foto serve l'IA, ma non è disponibile: ${esc(err.message)}\n<b>Non ho salvato nulla.</b>`);
+      await tg.send(chatId, `❌ L'IA non ha risposto: ${esc(err.message)}\n<b>Non ho salvato nulla.</b> Riprova tra poco.`);
       return ok({ ok: false, error: err.code });
     }
+    const queued = await supabase.from('ai_note_queue').insert({ user_id: owner, content: text, source: 'telegram', status: 'queued' }).select('id').single();
+    const kept = queued.error ? '<b>Non sono riuscito nemmeno a metterlo da parte: riscrivilo più tardi.</b>' : 'L\'ho messo da parte nella coda: appena l\'IA torna, /digest lo elabora.';
+    await tg.send(chatId, `❌ L'IA non ha risposto: ${esc(err.message)}\nNon ho salvato nulla di strutturato. ${kept}`);
+    return ok({ ok: false, error: err.code, queued: !queued.error });
   }
-
-  // 2) Regole semplici (zero token) — con avviso se l'IA era configurata ma non ha risposto
-  const body = extractBodyHeuristic(text);
-  if (body) {
-    const result = await applyExtraction(deps, owner, { body_log: { ...body, date } }, date);
-    await replyWithUndo(deps, tg, owner, chatId, `${notice ? `${notice}\n\n` : ''}✅ <b>Registrato in Body</b>`, result);
-    return ok({ ok: true, intent: 'body_log', saved: result.saved.length, failed: result.failed.length });
-  }
-
-  const g = guessDomain(text);
-  const label = text.split(/[:\-–]/)[0].trim();
-  const nodeLabel = (text.includes(':') || text.includes('-')) && label.length <= 40 ? label.replace(/^ricetta\s+/i, '').trim() : text.split(/\s+/).slice(0, 3).join(' ');
-  await createPendingBrain(deps, tg, owner, chatId, { title: `${g.display}: ${nodeLabel}`, domain: g.domain, domain_display: g.display, domain_emoji: g.emoji, node_label: nodeLabel, node_type: g.nodeType, properties_summary: text, fact_subject: nodeLabel, fact_key: g.domain === 'cucina' ? 'dosi_ottimali' : 'dettagli', fact_value: text }, text, notice);
-  return ok({ ok: true, intent: 'new_open_domain' });
 }
 
 // ---------------------------------------------------------------------------

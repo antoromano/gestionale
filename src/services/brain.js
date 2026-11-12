@@ -3,7 +3,7 @@
 // Persistenza: sincronizzazione cloud generica (cloud.js). IA: ai-client.js (modelli scoperti da Google, errori espliciti).
 // L'estrattore euristico locale resta disponibile ma è SEMPRE dichiarato come tale (engine: 'local').
 
-import { aiGenerate, aiEmbed, isAiConfigured } from './ai-client.js';
+import { aiGenerate, aiEmbed, isAiConfigured, GeminiError } from './ai-client.js';
 import { store } from './store.js';
 import { getSupabase } from './supabase.js';
 import {
@@ -394,278 +394,6 @@ export function upsertGraphRelationship({
 }
 
 /**
- * Estrattore Euristico Locale Deterministico
- * Analizza qualsiasi nota tecnica, cliente, body/allenamento o regola personale ed estrae:
- * - facts: array di { subject, fact_key, fact_value, category }
- * - nodes: array di { label, node_type, properties }
- * - edges: array di { source_label, target_label, source_type, target_type, relation_type, evidence }
- */
-export function extractKnowledgeLocally(text = '', domain = 'work', title = '') {
-  const fullText = `${title ? title + '. ' : ''}${text}`.trim();
-  const facts = [];
-  const nodes = [];
-  const edges = [];
-
-  if (!fullText) {
-    return { summary: '', facts, nodes, edges, tags: [] };
-  }
-
-  const lower = fullText.toLowerCase();
-  const tags = new Set();
-
-  // Determina il soggetto principale della nota
-  let primarySubject = 'Antonio';
-  let primarySubjectType = 'person';
-
-  if (domain === 'body') {
-    primarySubject = 'Antonio';
-    tags.add('body');
-  }
-
-  // Controlla se viene menzionato un cliente esistente
-  const existingClients = store.getAll('clients');
-  for (const c of existingClients) {
-    const cName = c.company_name || `${c.first_name || ''} ${c.last_name || ''}`.trim();
-    if (cName && lower.includes(cName.toLowerCase())) {
-      primarySubject = cName;
-      primarySubjectType = 'client';
-      nodes.push({ label: cName, node_type: 'client', properties: { client_id: c.id } });
-      tags.add(cName.toLowerCase().replace(/\s+/g, '-'));
-      break;
-    }
-  }
-
-  // Se non c'è un cliente già in store, cerca pattern espliciti "Cliente X", "per X", "con X", o soggetto iniziale
-  if (primarySubject === 'Antonio') {
-    const clientMatch = fullText.match(/(?:cliente|azienda|progetto|per|con)\s+([A-Z][a-zA-Z0-9_-]{2,25}(?:\s+[A-Z][a-zA-Z0-9_-]{2,25})?)/);
-    if (clientMatch && !/^(Antonio|Oggi|Domani|Lunedì|Martedì|Mercoledì|Giovedì|Venerdì|Sabato|Domenica|Next|React|Supabase|Pull|Squat|Panca)$/i.test(clientMatch[1].trim())) {
-      primarySubject = clientMatch[1].trim();
-      primarySubjectType = inferNodeType(primarySubject, domain === 'client' ? 'client' : null);
-      nodes.push({ label: primarySubject, node_type: primarySubjectType, properties: {} });
-    } else {
-      // Cerca un nome proprio capitalizzato all'inizio della frase es. "TechCorp usa..." o "Nexus ha..."
-      const leadingSubj = fullText.match(/^([A-Z][a-zA-Z0-9_.-]{2,25})\s+(?:usa|utilizza|ha|richiede|paga|dipende|passa|aggiorna)/);
-      if (leadingSubj && !/^(Oggi|Domani|Nota| Appunto|Regola|Quando)$/i.test(leadingSubj[1])) {
-        primarySubject = leadingSubj[1].trim();
-        primarySubjectType = inferNodeType(primarySubject, domain === 'client' ? 'client' : null);
-        nodes.push({ label: primarySubject, node_type: primarySubjectType, properties: {} });
-      }
-    }
-  }
-
-  // 1. Rilevamento Tecnologie e Relazioni USA_TECNOLOGIA
-  const foundTechs = [];
-  for (const tech of KNOWN_TECHNOLOGIES) {
-    const escaped = tech.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(?:^|[^a-zA-Z0-9])${escaped}(?=$|[^a-zA-Z0-9])`, 'i');
-    if (regex.test(fullText)) {
-      foundTechs.push(tech);
-      nodes.push({ label: tech, node_type: 'technology', properties: { category: 'tech_stack' } });
-      tags.add(tech.toLowerCase().replace('.', ''));
-      edges.push({
-        source_label: primarySubject,
-        source_type: primarySubjectType,
-        target_label: tech,
-        target_type: 'technology',
-        relation_type: 'USA_TECNOLOGIA',
-        evidence: fullText.slice(0, 160),
-      });
-    }
-  }
-
-  if (foundTechs.length > 0) {
-    facts.push({
-      subject: primarySubject,
-      fact_key: 'stack_principale',
-      fact_value: foundTechs.join(', '),
-      category: primarySubjectType === 'client' ? 'client_info' : 'preference',
-    });
-  }
-
-  // 2. Rilevamento Esercizi & Biometria (Body & Salute)
-  const foundExercises = [];
-  for (const ex of KNOWN_EXERCISES) {
-    const regex = new RegExp(`\\b${ex.replace('-', '[-\\s]?')}\\b`, 'i');
-    if (regex.test(fullText)) {
-      foundExercises.push(ex);
-      nodes.push({ label: ex, node_type: 'exercise', properties: {} });
-      tags.add(ex.toLowerCase());
-    }
-  }
-
-  // Metriche di allenamento (es. "massimale pull-up 15", "pull-up: 18 ripetizioni", "panca piana 95kg", "target kcal 2500", "peso 75.5 kg")
-  const maxMatch = fullText.match(/massimale\s+([a-zA-Z0-9\s-]+?)\s*(?:[:=è]|di|a)?\s*(\d+(?:[.,]\d+)?\s*(?:kg|rip|ripetizioni|reps|sec|min)?)/i);
-  if (maxMatch) {
-    const exName = maxMatch[1].trim();
-    const val = maxMatch[2].trim();
-    const keySlug = `massimale_${exName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`;
-    facts.push({
-      subject: 'Allenamento',
-      fact_key: keySlug,
-      fact_value: val,
-      category: 'metric',
-    });
-  }
-
-  // Target Kcal / Calorie
-  const kcalMatch = fullText.match(/(?:target\s+kcal|calorie(?:\s+giornaliere)?|kcal(?:\s+target)?)\s*(?:[:=è]|a|di)?\s*(\d{3,4}(?:\s*kcal)?)/i)
-    || fullText.match(/(\d{3,4})\s*kcal/i);
-  if (kcalMatch) {
-    const val = kcalMatch[1].toLowerCase().includes('kcal') ? kcalMatch[1].trim() : `${kcalMatch[1].trim()} kcal`;
-    facts.push({
-      subject: 'Antonio',
-      fact_key: 'target_kcal',
-      fact_value: val,
-      category: 'metric',
-    });
-    nodes.push({ label: 'Target Kcal', node_type: 'biometric', properties: { value: val } });
-  }
-
-  // Peso corporeo
-  const weightMatch = fullText.match(/\bpeso(?:\s+corporeo)?\s*(?:[:=è]|a|di)?\s*(\d{2,3}(?:[.,]\d+)?\s*kg)/i);
-  if (weightMatch) {
-    facts.push({
-      subject: 'Antonio',
-      fact_key: 'peso_corporeo',
-      fact_value: weightMatch[1].trim(),
-      category: 'metric',
-    });
-    nodes.push({ label: 'Peso Corporeo', node_type: 'biometric', properties: { value: weightMatch[1].trim() } });
-  }
-
-  // Canone / MRR / Budget / Prezzo
-  const mrrMatch = fullText.match(/(?:canone(?:\s+mrr|\s+manutenzione|\s+mensile)?|mrr|retainer)\s*(?:[:=è]|a|di)?\s*(\d+(?:[.,]\d+)?\s*(?:€|euro)(?:\s*\/\s*(?:mese|anno|trimestre))?)/i)
-    || fullText.match(/(\d+(?:[.,]\d+)?\s*(?:€|euro)\s*\/\s*mese)/i);
-  if (mrrMatch) {
-    facts.push({
-      subject: primarySubject,
-      fact_key: 'canone_mrr',
-      fact_value: mrrMatch[1].trim(),
-      category: primarySubjectType === 'client' ? 'client_info' : 'metric',
-    });
-  }
-
-  // Repository GitHub
-  const repoMatch = fullText.match(/(?:github\.com\/|repo(?:\s+github)?[:\s]+)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/i);
-  if (repoMatch) {
-    const repo = repoMatch[1].replace(/\.git$/, '');
-    facts.push({
-      subject: primarySubject,
-      fact_key: 'github_repo',
-      fact_value: repo,
-      category: 'client_info',
-    });
-  }
-
-  // Pattern espliciti "chiave: valore" o "Soggetto -> chiave = valore"
-  const kvRegex = /([A-Za-zÀ-ÿ0-9_\s]{2,30})\s*[:=]\s*([^\n.;,]{2,60})/g;
-  let kvMatch;
-  while ((kvMatch = kvRegex.exec(fullText)) !== null) {
-    const rawKey = kvMatch[1].trim();
-    const rawVal = kvMatch[2].trim();
-    if (/^(http|https|es|esempio|nota|nb|ore)$/i.test(rawKey)) continue;
-    // Una "chiave" è un'etichetta breve ("stack", "canone mensile"), non l'inizio di una frase ("Ho sentito Marco Rossi di TechCorp")
-    if (rawKey.split(/\s+/).length > 3 || /^(ho|ha|hanno|abbiamo|oggi|ieri|domani|ricordarsi|ricordare)\b/i.test(rawKey)) continue;
-    const normKey = rawKey.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
-    if (normKey.length >= 3 && normKey.length <= 32 && rawVal.length >= 1) {
-      const alreadyExists = facts.some(f => f.fact_key === normKey);
-      if (!alreadyExists) {
-        facts.push({
-          subject: primarySubject,
-          fact_key: normKey,
-          fact_value: rawVal,
-          category: domain === 'client' ? 'client_info' : (/\d/.test(rawVal) ? 'metric' : 'status'),
-        });
-      }
-    }
-  }
-
-  // Preferenze e Regole esplicite ("Preferisco X", "Regola: X", "Standard: X")
-  const prefMatch = fullText.match(/(?:preferisco|uso sempre|scelgo sempre|la mia regola è)\s+([^.,;\n]{4,80})/i);
-  if (prefMatch) {
-    facts.push({
-      subject: 'Antonio',
-      fact_key: 'preferenza_operativa',
-      fact_value: prefMatch[1].trim(),
-      category: 'preference',
-    });
-  }
-
-  // 3. Estrazione Relazioni Causali e Semantiche per il Knowledge Graph
-  // Pattern: [Entità A] (causa|provoca|migliora|riduce|dipende da|lavora con|usa|risolve|blocca) [Entità B]
-  const relationPatterns = [
-    { regex: /([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})\s+(?:causa|provoca|genera|porta a)\s+([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})/gi, rel: 'CAUSA' },
-    { regex: /([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})\s+(?:migliora|ottimizza|potenzia|aumenta|favorisce)\s+([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})/gi, rel: 'MIGLIORA' },
-    { regex: /([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})\s+(?:riduce|diminuisce|allevia|elimina|previene)\s+([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})/gi, rel: 'RIDUCE' },
-    { regex: /([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})\s+(?:dipende da|richiede|si basa su|necessita di)\s+([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})/gi, rel: 'DIPENDE_DA' },
-    { regex: /([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})\s+(?:lavora con|collabora con|è cliente di)\s+([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})/gi, rel: 'LAVORA_CON' },
-    { regex: /([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})\s+(?:usa|utilizza|adotta|integra)\s+([A-ZÀ-Ÿa-zà-ÿ0-9_.-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ0-9_.-]+){0,3})/gi, rel: 'USA_TECNOLOGIA' },
-  ];
-
-  const cleanEntityLabel = (str = '') => {
-    return str
-      .replace(/^(il|lo|la|i|gli|le|un|uno|una|del|della|dei|delle|al|alla|con|per|su|da|che|quando|se)\s+/i, '')
-      .replace(/\s+(il|lo|la|i|gli|le|un|uno|una)$/i, '')
-      .trim();
-  };
-
-  for (const { regex, rel } of relationPatterns) {
-    let m;
-    while ((m = regex.exec(fullText)) !== null) {
-      const src = cleanEntityLabel(m[1]);
-      const tgt = cleanEntityLabel(m[2]);
-      if (src.length >= 2 && tgt.length >= 2 && src.toLowerCase() !== tgt.toLowerCase()) {
-        const srcType = inferNodeType(src);
-        const tgtType = inferNodeType(tgt, rel === 'USA_TECNOLOGIA' ? 'technology' : null);
-        nodes.push({ label: src, node_type: srcType, properties: {} });
-        nodes.push({ label: tgt, node_type: tgtType, properties: {} });
-        edges.push({
-          source_label: src,
-          source_type: srcType,
-          target_label: tgt,
-          target_type: tgtType,
-          relation_type: rel,
-          evidence: m[0].trim(),
-        });
-      }
-    }
-  }
-
-  // Se sono stati trovati più nodi tecnologici o esercizi nella stessa nota, collega soggetto -> nodo
-  for (const ex of foundExercises) {
-    edges.push({
-      source_label: primarySubject,
-      source_type: primarySubjectType,
-      target_label: ex,
-      target_type: 'exercise',
-      relation_type: 'PRATICA',
-      evidence: fullText.slice(0, 140),
-    });
-  }
-
-  // Se non è stato estratto alcun fatto specifico ma il testo contiene informazioni rilevanti, crea un fatto di stato sintetico
-  if (facts.length === 0 && fullText.length >= 8) {
-    const autoKey = title
-      ? title.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '').slice(0, 28)
-      : `nota_${domain}`;
-    facts.push({
-      subject: primarySubject,
-      fact_key: autoKey || `stato_${domain}`,
-      fact_value: fullText.slice(0, 140),
-      category: domain === 'client' ? 'client_info' : (domain === 'personal' ? 'rule' : 'status'),
-    });
-  }
-
-  return {
-    summary: fullText.length > 110 ? `${fullText.slice(0, 107)}...` : fullText,
-    facts,
-    nodes,
-    edges,
-    tags: Array.from(tags),
-  };
-}
-
-/**
  * Estrazione strutturata con l'IA. Lancia GeminiError se l'IA non è disponibile (il chiamante lo mostra all'utente).
  */
 async function extractKnowledgeWithAi(text, domain, title) {
@@ -709,40 +437,27 @@ Estrai un oggetto JSON valido con questa esatta struttura:
   return { ...data, model };
 }
 
-/**
- * PASSO 1 — Propone cosa estrarre da una nota SENZA salvare nulla (per l'anteprima).
- * @returns {{engine:'ai'|'local', model?:string, error?:{code:string,message:string}, summary:string, tags:string[], facts:Array, nodes:Array, edges:Array}}
- *   engine 'local' = regole semplici (poco affidabili): l'interfaccia deve dirlo, con il motivo in `error`.
- */
 export async function proposeKnowledge({ text, content, title = '', domain = 'work' }) {
   const rawText = (text || content || '').trim();
   if (!rawText) throw new Error('Il contenuto da memorizzare nel Second Brain non può essere vuoto.');
   const resolvedDomain = domain && String(domain).trim().length > 0 ? String(domain).trim() : 'work';
-  const local = extractKnowledgeLocally(rawText, resolvedDomain, title);
 
+  // Solo IA: se non è disponibile l'errore (con il motivo) arriva all'utente e non si salva nulla
   if (!isAiConfigured()) {
-    return { engine: 'local', error: { code: 'not_configured', message: 'IA non configurata: uso regole semplici, poco affidabili.' }, ...local };
+    throw new GeminiError('not_configured', 'L\'IA non è configurata: apri Impostazioni → Verifica IA.');
   }
-  try {
-    const ai = await extractKnowledgeWithAi(rawText, resolvedDomain, title);
-    return {
-      engine: 'ai',
-      model: ai.model,
-      summary: ai.summary || local.summary,
-      tags: Array.from(new Set([...(ai.tags || []), ...(local.tags || [])].map(t => String(t).trim()).filter(Boolean))),
-      facts: Array.isArray(ai.facts) ? ai.facts : [],
-      nodes: Array.isArray(ai.nodes) ? ai.nodes : [],
-      edges: Array.isArray(ai.edges) ? ai.edges : [],
-    };
-  } catch (err) {
-    return { engine: 'local', error: { code: err.code || 'unavailable', message: err.message }, ...local };
-  }
+  const ai = await extractKnowledgeWithAi(rawText, resolvedDomain, title);
+  return {
+    engine: 'ai',
+    model: ai.model,
+    summary: ai.summary || rawText.slice(0, 120),
+    tags: Array.from(new Set((ai.tags || []).map(t => String(t).trim()).filter(Boolean))),
+    facts: Array.isArray(ai.facts) ? ai.facts : [],
+    nodes: Array.isArray(ai.nodes) ? ai.nodes : [],
+    edges: Array.isArray(ai.edges) ? ai.edges : [],
+  };
 }
 
-/**
- * PASSO 2 — Salva memoria (Livello 1), fatti Mem0 (Livello 2) e grafo (Livello 3) a partire da una proposta
- * (eventualmente corretta dall'utente). `proposal.facts/nodes/edges` possono essere vuoti: si salva solo la memoria.
- */
 export async function commitKnowledge({ text, content, title = '', domain = 'work', sourceType = 'manual', sourceId = null, tags = [] }, proposal) {
   const rawText = (text || content || '').trim();
   if (!rawText) throw new Error('Il contenuto da memorizzare nel Second Brain non può essere vuoto.');

@@ -38,6 +38,7 @@ function makeFetch({ models = MODELS_OK, generateResponse = null, generateStatus
   return { fn, log };
 }
 
+const withAi = (env = {}) => ({ ...env, GEMINI_API_KEY: 'KEY' });
 const textMsg = (text, extra = {}) => ({
   update_id: 1,
   message: { message_id: 10, date: Math.floor(Date.parse('2026-11-11T09:00:00Z') / 1000), chat: { id: OWNER_TG }, from: { id: OWNER_TG, username: 'antonio' }, text, ...extra },
@@ -59,8 +60,8 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
   afterEach(() => cloud.stop());
 
   it('1. IL TUO CASO: "Pull Up 20(10,10,10,10), peso 75.1kg" su Telegram compare nell\'app, col tuo user_id', async () => {
-    const { fn, log } = makeFetch();
-    const res = await handleUpdate(textMsg('Pull Up 20(10,10,10,10), peso 75.1kg'), { env: baseEnv, supabase: fake.service(), fetch: fn });
+    const { fn, log } = makeFetch({ generateResponse: { body_log: { date: '2026-11-11', body_weight_kg: 75.1, workouts: [{ exercise_name: 'Pull Up', raw_notation: '20(10,10,10,10)' }] } } });
+    const res = await handleUpdate(textMsg('Pull Up 20(10,10,10,10), peso 75.1kg'), { env: withAi(baseEnv), supabase: fake.service(), fetch: fn });
     expect(res.body.ok).toBe(true);
 
     // il database ha davvero le righe, col proprietario giusto
@@ -72,7 +73,7 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
 
     // la risposta è onesta e ha il pulsante Annulla
     const sent = log.telegram.filter(t => t.method === 'sendMessage').pop();
-    expect(sent.text).toContain('Registrato in Body');
+    expect(sent.text).toContain('Salvato');
     expect(sent.reply_markup.inline_keyboard[0][0].callback_data).toMatch(/^undo:/);
 
     // e l'APP lo vede (prima era impossibile)
@@ -84,8 +85,8 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
 
   it('2. con l\'app già aperta il dato del bot arriva da solo (tempo reale)', async () => {
     await cloud.start(fake.browser(), owner);
-    const { fn } = makeFetch();
-    await handleUpdate(textMsg('peso 74.8 kg, dormito 8 ore'), { env: baseEnv, supabase: fake.service(), fetch: fn });
+    const { fn } = makeFetch({ generateResponse: { body_log: { date: '2026-11-11', body_weight_kg: 74.8, sleep_hours: 8 } } });
+    await handleUpdate(textMsg('peso 74.8 kg, dormito 8 ore'), { env: withAi(baseEnv), supabase: fake.service(), fetch: fn });
     expect(store.getAll('body_daily_logs')[0]).toMatchObject({ body_weight_kg: 74.8, sleep_hours: 8 });
   });
 
@@ -100,13 +101,13 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
   });
 
   it('4. se il database rifiuta la scrittura il bot lo dice e NON scrive "✅ Registrato"', async () => {
-    const { fn, log } = makeFetch();
+    const { fn, log } = makeFetch({ generateResponse: { body_log: { date: '2026-11-11', body_weight_kg: 75, calories_kcal: 2400 } } });
     fake.failNext('body_daily_logs', { message: 'disk full' }, true);
-    await handleUpdate(textMsg('peso 75 kg, 2400 kcal'), { env: baseEnv, supabase: fake.service(), fetch: fn });
+    await handleUpdate(textMsg('peso 75 kg, 2400 kcal'), { env: withAi(baseEnv), supabase: fake.service(), fetch: fn });
     const text = lastText(log);
     expect(text).toContain('Non salvato');
     expect(text).toContain('disk full');
-    expect(text).not.toContain('✅ <b>Registrato');
+    expect(text).not.toContain('✅ <b>Salvato');
   });
 
   it('5. sicurezza: utente non autorizzato respinto; senza TELEGRAM_ALLOWED_USER_ID il bot non accetta nessuno', async () => {
@@ -126,8 +127,8 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
   });
 
   it('6. il pulsante Annulla rimuove ciò che il bot ha inserito', async () => {
-    const { fn, log } = makeFetch();
-    const deps = { env: baseEnv, supabase: fake.service(), fetch: fn };
+    const { fn, log } = makeFetch({ generateResponse: { body_log: { date: '2026-11-11', body_weight_kg: 75, workouts: [{ exercise_name: 'Dips', raw_notation: '25(8,8,8)' }] } } });
+    const deps = { env: withAi(baseEnv), supabase: fake.service(), fetch: fn };
     await handleUpdate(textMsg('Dips 25(8,8,8), peso 75 kg'), deps);
     expect(fake.tables.body_workout_entries).toHaveLength(1);
 
@@ -169,7 +170,7 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
     expect(store.getQueuedNotes()).toHaveLength(0);
   });
 
-  it('8. IA non disponibile: /digest lo dice col motivo e le note restano in coda; sul testo semplice usa le regole con AVVISO', async () => {
+  it('8. IA non disponibile: /digest lo dice col motivo e le note restano in coda; un messaggio normale NON viene indovinato: errore col motivo e messaggio messo da parte', async () => {
     const { fn, log } = makeFetch({ generateStatus: 404 });
     const deps = { env: { ...baseEnv, GEMINI_API_KEY: 'KEY' }, supabase: fake.service(), fetch: fn };
     await handleUpdate(textMsg('/queue ho speso 45€ di benzina'), deps);
@@ -179,15 +180,20 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
     expect(fake.tables.ai_note_queue[0].status).toBe('queued');
 
     clearModelCache();
+    const queuedBefore = fake.tables.ai_note_queue.length;
     await handleUpdate(textMsg('Pull Up 20(10,10), peso 75 kg'), deps);
-    expect(lastText(log)).toContain('IA non disponibile');
-    expect(lastText(log)).toContain('Registrato in Body'); // regole semplici, ma dichiarato
-    expect(fake.tables.body_workout_entries).toHaveLength(1);
+    expect(lastText(log)).toContain("L'IA non ha risposto");
+    expect(lastText(log)).toContain('non è più disponibile');
+    expect(lastText(log)).toContain('messo da parte');
+    expect(fake.tables.body_workout_entries).toHaveLength(0); // nessuna regola locale indovina al posto dell'IA
+    expect(fake.tables.body_daily_logs).toHaveLength(0);
+    expect(fake.tables.ai_note_queue).toHaveLength(queuedBefore + 1); // il messaggio non va perso
+    expect(fake.tables.ai_note_queue.at(-1)).toMatchObject({ content: 'Pull Up 20(10,10), peso 75 kg', status: 'queued', user_id: owner });
   });
 
   it('9. Second Brain da Telegram: nuovo argomento → conferma con pulsante → memoria, nodo e fatto con il tuo user_id', async () => {
-    const { fn, log } = makeFetch();
-    const deps = { env: baseEnv, supabase: fake.service(), fetch: fn };
+    const { fn, log } = makeFetch({ generateResponse: { brain_note: { title: 'Cucina: Carbonara', domain: 'cucina', domain_display: 'Cucina / Ricette', domain_emoji: '🍳', node_label: 'Carbonara', node_type: 'recipe', properties_summary: '4 tuorli, 200g guanciale, 80g pecorino', fact_subject: 'Carbonara', fact_key: 'dosi_ottimali', fact_value: '4 tuorli, 200g guanciale, 80g pecorino' } } });
+    const deps = { env: withAi(baseEnv), supabase: fake.service(), fetch: fn };
     await handleUpdate(textMsg('Ricetta Carbonara: 4 tuorli, 200g guanciale, 80g pecorino'), deps);
     const sent = log.telegram.filter(t => t.method === 'sendMessage').pop();
     const confirmData = sent.reply_markup.inline_keyboard[0][0].callback_data;

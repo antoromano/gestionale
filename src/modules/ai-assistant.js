@@ -374,6 +374,21 @@ export function openAiModal(options = {}) {
     reader.readAsDataURL(file);
   });
 
+  // L'IA non ha risposto: si mostra il motivo scritto per esteso e non si propone nulla
+  function showAiFailure(err) {
+    loadingSection.style.display = 'none';
+    inputSection.style.display = 'block';
+    const host = div.querySelector('#ai-persona-banner');
+    if (host) {
+      const prev = host.parentElement.querySelector('.ai-failure');
+      if (prev) prev.remove();
+      const box = document.createElement('div');
+      box.className = 'notice err ai-failure';
+      box.innerHTML = `<strong>❌ L'IA non ha risposto, quindi non ho salvato né proposto nulla.</strong><br>${escapeHtml(err.message || String(err))}<br><span class="muted">Il testo che hai scritto è ancora qui: puoi riprovare, oppure usare le schermate normali. Per controllare l'IA: Impostazioni → Verifica IA.</span>`;
+      host.insertAdjacentElement('afterend', box);
+    }
+  }
+
   // Elaborazione Richiesta
   div.querySelector('#ai-process-btn').addEventListener('click', async () => {
     const text = textInput.value.trim();
@@ -403,9 +418,7 @@ export function openAiModal(options = {}) {
       currentParsedResult = result;
       displayResults(result);
     } catch (err) {
-      alert('Errore durante l\'elaborazione dell\'IA: ' + err.message);
-      inputSection.style.display = 'block';
-      loadingSection.style.display = 'none';
+      showAiFailure(err);
     }
   });
 
@@ -433,9 +446,7 @@ export function openAiModal(options = {}) {
       currentParsedResult = result;
       displayResults(result);
     } catch (err) {
-      alert('Errore durante l\'elaborazione della coda: ' + err.message);
-      inputSection.style.display = 'block';
-      loadingSection.style.display = 'none';
+      showAiFailure(err);
     }
   }
 
@@ -720,14 +731,7 @@ export function openAiModal(options = {}) {
   function renderEngineBanner(data) {
     const el = div.querySelector('#ai-engine-banner');
     if (!el) return;
-    if (data.engine === 'local') {
-      const why = data.aiError?.message ? escapeHtml(data.aiError.message) : 'L\'IA non è configurata.';
-      el.innerHTML = `<div class="notice warn"><strong>⚠️ Non ha lavorato l'IA</strong> — ${why}<br>Ho usato regole semplici: controlla bene le proposte. Per sistemare l'IA vai in Impostazioni → Verifica IA.</div>`;
-    } else if (data.engine === 'ai') {
-      el.innerHTML = '<div class="notice ok">✅ Letto dall\'IA</div>';
-    } else {
-      el.innerHTML = '';
-    }
+    el.innerHTML = '';
   }
 
   function renderBatchBanner(data) {

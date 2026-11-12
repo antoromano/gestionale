@@ -46,18 +46,31 @@ function mapHttpError(status, bodyText, model) {
   return new GeminiError('bad_response', `Gemini ha risposto con un errore (${status}).`, short);
 }
 
-async function request(fetchFn, url, apiKey, init = {}, model = '') {
+let requestTimeoutMs = 40000;
+/** Limite di attesa per ogni richiesta a Google (modificabile solo per i test). */
+export function setGeminiTimeout(ms) { requestTimeoutMs = ms; }
+
+async function request(fetchFn, url, apiKey, init = {}, model = '', timeoutMs = requestTimeoutMs) {
   let res;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     res = await fetchFn(url, {
       ...init,
+      ...(controller ? { signal: controller.signal } : {}),
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey, ...(init.headers || {}) },
     });
+    if (!res.ok) throw mapHttpError(res.status, await res.text().catch(() => ''), model);
+    return await res.json();
   } catch (err) {
+    if (err instanceof GeminiError) throw err;
+    if (controller?.signal.aborted) {
+      throw new GeminiError('timeout', `Gemini non ha risposto entro ${Math.round(timeoutMs / 1000)} secondi (${model || 'richiesta'}).`);
+    }
     throw new GeminiError('network', 'Impossibile raggiungere Gemini: controlla la connessione.', err?.message);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  if (!res.ok) throw mapHttpError(res.status, await res.text().catch(() => ''), model);
-  return res.json();
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +234,22 @@ export async function embed({ apiKey, fetchFn = fetch, env = {}, text, dims = 76
 
 /** Diagnostica per la schermata Impostazioni: quale modello userà e se la chiave funziona davvero. */
 export async function diagnose({ apiKey, fetchFn = fetch, env = {} }) {
-  const resolved = await resolveModels(apiKey, { fetchFn, env, force: true });
-  const probe = await generate({ apiKey, fetchFn, env, parts: [{ text: 'Rispondi con {"ok":true}' }], temperature: 0 });
-  return { generateModel: resolved.generate, embedModel: resolved.embed, probeOk: probe.data?.ok === true, availableCount: resolved.available.length };
+  const step = async (name, fn) => {
+    const t0 = Date.now();
+    try {
+      return { value: await fn(), ms: Date.now() - t0 };
+    } catch (err) {
+      err.message = `[passo: ${name}] ${err.message}`;
+      throw err;
+    }
+  };
+  const list = await step('elenco modelli', () => resolveModels(apiKey, { fetchFn, env, force: true }));
+  const probe = await step(`prova di risposta con ${list.value.generate}`, () => generate({ apiKey, fetchFn, env, parts: [{ text: 'Rispondi con {"ok":true}' }], temperature: 0 }));
+  return {
+    generateModel: list.value.generate,
+    embedModel: list.value.embed,
+    probeOk: probe.value.data?.ok === true,
+    availableCount: list.value.available.length,
+    timings: { listMs: list.ms, generateMs: probe.ms },
+  };
 }

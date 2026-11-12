@@ -84,8 +84,8 @@ Gestionale1/
 │   ├── services/
 │   │   ├── store.js             # Store dati centralizzato, CRUD, Soft-delete e backup
 │   │   ├── supabase.js          # Wrapper client Supabase con Storage upload
-│   │   ├── ai.js                # Gemini + AI_PROFILES, payload di sistema, batch coda, parser euristico
-│   │   ├── devils-advocate.js   # Evidenze deterministiche e critica a zero token dell'Avvocato del Diavolo
+│   │   ├── ai.js                # Gemini + AI_PROFILES, payload di sistema, batch coda (solo IA, nessun parser locale)
+│   │   ├── devils-advocate.js   # Evidenze deterministiche dai tuoi dati per l'Avvocato del Diavolo
 │   │   ├── finances.js          # Logica pura: cash flow, ricorrenze, margine netto e ROI %
 │   │   ├── note-queue-sync.js   # Sync best-effort della coda con Supabase (ai_note_queue)
 │   │   └── pdf.js               # Motore PDF duplice (Digitale e Stampa)
@@ -151,6 +151,7 @@ Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header del
 - **Una sola fonte di verità: Supabase.** Il browser tiene solo una copia veloce (cache) e sincronizza da solo (`src/services/cloud.js`): invia le modifiche, riceve quelle fatte altrove (es. da Telegram) in tempo reale, e mostra sempre lo stato in alto ("Sincronizzato", "Offline", "Errore").
 - **Accesso con email e password** (Supabase Auth). Il database accetta **un solo utente**: il primo che si registra; ogni altro tentativo viene rifiutato (migrazione `007`/`008`). I dati senza proprietario vengono adottati dal primo utente.
 - **Telegram** (`supabase/functions/telegram-webhook`): risponde "✅" solo se il database ha confermato la scrittura; ogni salvataggio ha il tasto *Annulla*. Risponde solo al proprietario (`TELEGRAM_ALLOWED_USER_ID`).
+- **Solo IA, niente regole di ripiego**: assistente, Second Brain e Telegram usano esclusivamente Gemini. Se non risponde compare l'errore con il motivo (e su Telegram il messaggio viene messo in coda) — nessun dato viene indovinato da espressioni regolari.
 - **IA**: la chiave sta solo sul server (secret `GEMINI_API_KEY`). Il modello viene scoperto dinamicamente (niente nomi di modello scritti nel codice). Se l'IA non risponde l'app lo dice chiaramente, non finge. *Impostazioni → Verifica IA* controlla tutto.
 - **Second Brain**: prima mostra "Cosa ho capito" e salva solo dopo la tua conferma.
 - **Inbox unico** in alto: scrivi qualsiasi cosa e Invio; "Da parte" mette la nota in coda per elaborarla in blocco con una sola richiesta IA.

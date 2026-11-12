@@ -16,7 +16,11 @@ export function isAiConfigured() {
 async function viaEdge(action, body) {
   const client = getSupabase();
   if (!client) return null;
-  const { data, error } = await client.functions.invoke('gemini-assistant', { body: { action, ...body } });
+  const timeoutMs = 75000;
+  const { data, error } = await Promise.race([
+    client.functions.invoke('gemini-assistant', { body: { action, ...body } }),
+    new Promise((_, rej) => setTimeout(() => rej(new core.GeminiError('timeout', `La funzione IA sul cloud non ha risposto entro ${timeoutMs / 1000} secondi.`)), timeoutMs)),
+  ]);
   if (error) {
     let detail = error.message || 'errore sconosciuto';
     try {
@@ -80,7 +84,7 @@ export async function aiDiagnose() {
   const localKey = store.getSettings().gemini_api_key;
   try {
     const res = await viaEdge('diagnose', {});
-    if (res) return { ok: true, via: 'edge', generateModel: res.generateModel, embedModel: res.embedModel, probeOk: res.probeOk };
+    if (res) return { ok: true, via: 'edge', generateModel: res.generateModel, embedModel: res.embedModel, probeOk: res.probeOk, timings: res.timings };
   } catch (err) {
     if (!(err.code === 'no_api_key' && localKey)) return { ok: false, code: err.code, message: err.message };
   }

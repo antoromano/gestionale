@@ -15,13 +15,12 @@ import {
 } from '../src/utils/formatters.js';
 import { buildQuotePdfFileName } from '../src/services/pdf.js';
 import { store } from '../src/services/store.js';
-import { clearModelCache } from '../src/services/gemini-core.js';
+import { clearModelCache, setGeminiTimeout } from '../src/services/gemini-core.js';
 import { processAiPrompt } from '../src/services/ai.js';
 import {
   ingestKnowledge,
   proposeKnowledge,
   commitKnowledge,
-  extractKnowledgeLocally,
   upsertFact,
   upsertGraphRelationship,
   querySecondBrain,
@@ -33,10 +32,6 @@ import {
   DEFAULT_BODY_COLUMNS,
 } from '../src/utils/body-parser.js';
 import {
-  processIncomingTelegramMessage,
-  confirmTelegramPendingAction,
-  rejectTelegramPendingAction,
-  buildProactiveMessages,
   getTelegramWebhookUrl,
   parseTelegramCommand,
 } from '../src/services/telegram.js';
@@ -68,6 +63,32 @@ import {
   buildBatchPrompt,
   processNoteQueueBatch,
 } from '../src/services/ai.js';
+
+
+/**
+ * IA simulata: la chiave è "presente", Google risponde con l'elenco modelli e, per generateContent, con il JSON dato
+ * (un oggetto fisso o una funzione del corpo della richiesta). Serve a provare cosa fa l'app DOPO la risposta dell'IA.
+ */
+function stubAi(response, { status = 200 } = {}) {
+  clearModelCache();
+  store.updateSettings({ gemini_api_key: 'TEST_KEY' });
+  const fn = vi.fn(async (url, init = {}) => {
+    const u = String(url);
+    if (/\/v1beta\/models(\?|$)/.test(u)) {
+      return { ok: true, json: async () => ({ models: [{ name: 'models/gemini-flash-latest', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-embedding-001', supportedGenerationMethods: ['embedContent'] }] }) };
+    }
+    if (u.includes(':generateContent')) {
+      if (status !== 200) return { ok: false, status, text: async () => JSON.stringify({ error: { message: 'errore simulato' } }) };
+      const body = init.body ? JSON.parse(init.body) : {};
+      const json = typeof response === 'function' ? response(body) : response;
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(json) }] } }] }) };
+    }
+    if (u.includes(':embedContent')) return { ok: true, json: async () => ({ embedding: { values: new Array(768).fill(0.05) } }) };
+    return { ok: false, status: 404, text: async () => '' };
+  });
+  vi.stubGlobal('fetch', fn);
+  return fn;
+}
 
 describe('1. Calcoli Economici Voci di Preventivo', () => {
   it('calcola correttamente il netto di una voce con quantità, prezzo e sconto', () => {
@@ -258,6 +279,8 @@ describe('6. Gestione Cestino (Soft Delete & Restore)', () => {
 });
 
 describe('7. Intelligenza Artificiale & Smart Parser Multitask', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it('riconosce richieste multiple distinte senza trasformare nomi di servizi in clienti', async () => {
     // Esempio cardine della specifica:
     // "Devo attivare un abbonamento per lavorare, fare le foto prodotti per Cliente A e preparare i contenuti per Cliente B."
@@ -268,6 +291,14 @@ describe('7. Intelligenza Artificiale & Smart Parser Multitask', () => {
       { id: 'c-b', name: 'Cliente B' },
     ];
 
+    stubAi({
+      summary: '3 attività',
+      todos: [
+        { title: 'Attivare abbonamento per lavorare', client_id: null },
+        { title: 'Foto prodotti', client_id: 'c-a', client_name_proposed: 'Cliente A' },
+        { title: 'Preparare contenuti', client_id: null, client_name_proposed: 'Cliente B' },
+      ],
+    });
     const result = await processAiPrompt({
       prompt,
       existingClients,
@@ -291,6 +322,8 @@ describe('7. Intelligenza Artificiale & Smart Parser Multitask', () => {
 });
 
 describe('8. Workflow Software Engineer: Ambienti, MRR & Onboarding IA', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it('calcola correttamente il fatturato ricorrente mensile (MRR) e annuale (ARR)', () => {
     const clients = [
       {
@@ -320,6 +353,11 @@ describe('8. Workflow Software Engineer: Ambienti, MRR & Onboarding IA', () => {
   it('l\'assistente IA riconosce e on-boarda un cliente storico con repo, ambienti e canone', async () => {
     const prompt = 'Lavoro da mesi con Marco di TechCorp, sito https://www.techcorp.it, staging https://stage.techcorp.dev, repo antoromano/techcorp-web, stack Next.js e Supabase, canone manutenzione 300€/mese. Devo fare deploy mercoledì alle 15.';
 
+    stubAi({
+      summary: 'Cliente storico',
+      clients_to_create: [{ company_name: 'TechCorp', first_name: 'Marco', production_url: 'https://www.techcorp.it', staging_url: 'https://stage.techcorp.dev', github_repo: 'antoromano/techcorp-web', stack: 'Next.js, Supabase', maintenance_amount: 300, maintenance_frequency: 'monthly' }],
+      appointments: [{ title: 'Deploy TechCorp', start_time: '2026-11-18T15:00:00', activity_type: 'deploy' }],
+    });
     const result = await processAiPrompt({ prompt });
     expect(result).toBeDefined();
     expect(result.clients_to_create).toBeDefined();
@@ -346,8 +384,19 @@ describe('9. Second Brain: Architettura Cognitiva Tri-Layer Ibrida', () => {
   beforeEach(() => {
     store.clearAll();
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it('1. esegue l\'ingestione nel Second Brain salvando memoria 768-dim, fatti atomici e grafo', async () => {
+    stubAi({
+      summary: 'TechCorp usa Next.js e Supabase',
+      tags: ['saas'],
+      facts: [
+        { subject: 'TechCorp', fact_key: 'stack_principale', fact_value: 'Next.js, Supabase, PostgreSQL', category: 'client_info' },
+        { subject: 'TechCorp', fact_key: 'canone_mrr', fact_value: '350€/mese', category: 'metric' },
+      ],
+      nodes: [{ label: 'Next.js', node_type: 'technology' }, { label: 'Supabase', node_type: 'technology' }, { label: 'TechCorp', node_type: 'client' }],
+      edges: [{ source_label: 'TechCorp', target_label: 'Next.js', relation_type: 'USA_TECNOLOGIA' }, { source_label: 'TechCorp', target_label: 'Supabase', relation_type: 'USA_TECNOLOGIA' }],
+    });
     const res = await ingestKnowledge({
       title: 'Architettura Cliente TechCorp',
       text: 'Il cliente TechCorp usa Next.js e Supabase con PostgreSQL. Canone MRR: 350€/mese. Massimale pull-up: 14 ripetizioni.',
@@ -424,6 +473,7 @@ describe('9. Second Brain: Architettura Cognitiva Tri-Layer Ibrida', () => {
   });
 
   it('3. crea nodi/archi nel Knowledge Graph e risponde tramite interrogazione ibrida a 2 Hop (querySecondBrain)', async () => {
+    stubAi({ summary: 'TechCorp usa Supabase', facts: [{ subject: 'TechCorp', fact_key: 'database', fact_value: 'Supabase', category: 'client_info' }], nodes: [], edges: [] });
     await ingestKnowledge({
       title: 'Note Stack e Sicurezza',
       text: 'TechCorp usa Supabase per il database cloud. Target kcal: 2450 kcal.',
@@ -507,6 +557,7 @@ describe('10. Modulo Body: Parser Notazione, Semaforo 2-3gg, Media Mobile Peso &
   beforeEach(() => {
     store.clearAll();
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it('1. parseWorkoutNotation interpreta carichi, serie, moltiplicatori (10x5), varianti con parole complete, sigle legacy e Singolo Arto', () => {
     // 1a. Carico e serie standard: 20(10,10,10,10)
@@ -592,6 +643,18 @@ describe('10. Modulo Body: Parser Notazione, Semaforo 2-3gg, Media Mobile Peso &
   it('4. l\'Assistente IA estrae un Body Log completo dal linguaggio naturale e lo sincronizza col Second Brain', async () => {
     const prompt = 'Oggi peso 75.3kg, dormito 7.5 ore, 2500 kcal con 165g proteine, 290g carbo e 75g grassi. Allenamento: Pull up 30(7,8,8) e presa larga (15,15), Affondi 20(15,15,15), Stacchi singolo arto 10(12,12), 1h basket';
 
+    stubAi({
+      summary: 'Diario Body',
+      body_log: {
+        date: '2026-11-11', body_weight_kg: 75.3, sleep_hours: 7.5, calories_kcal: 2500, protein_g: 165, carbs_g: 290, fat_g: 75,
+        workout_entries: [
+          { column_slug: 'pull_up', raw_notation: '30(7,8,8) + Presa Larga (15,15)' },
+          { column_slug: 'affondi', raw_notation: '20(15,15,15)' },
+          { column_slug: 'stacchi', raw_notation: 'Singolo Arto 10(12,12)' },
+          { column_slug: 'cardio_sport', raw_notation: '1h basket' },
+        ],
+      },
+    });
     const res = await processAiPrompt({ prompt });
     expect(res.body_log).toBeDefined();
     expect(res.body_log).not.toBeNull();
@@ -602,6 +665,7 @@ describe('10. Modulo Body: Parser Notazione, Semaforo 2-3gg, Media Mobile Peso &
     expect(res.body_log.carbs_g).toBe(290);
     expect(res.body_log.fat_g).toBe(75);
     expect(res.body_log.workout_entries.length).toBeGreaterThanOrEqual(4);
+    expect(res.body_log.workout_entries.map(e => e.column_slug)).toEqual(['pull_up', 'affondi', 'stacchi', 'cardio_sport']); // ogni esercizio nella sua colonna
 
     // Salva nel store e verifica l'auto-sync con il Second Brain (Livello 2 Mem0 + Livello 3 Grafo)
     store.upsertBodyDailyLog({
@@ -646,92 +710,8 @@ describe('11. Integrazione Telegram Bot & 4° Livello di Protezione (Human-in-th
     });
   });
 
-  it('1. blocca i messaggi provenienti da User ID non autorizzati nella whitelist (TELEGRAM_ALLOWED_USER_ID)', async () => {
-    const res = await processIncomingTelegramMessage({
-      chatId: 555555,
-      fromUserId: 111111, // diverso da 99887766
-      text: 'Trazioni 20(10,10,10,10)',
-    });
-
-    expect(res.ok).toBe(false);
-    expect(res.blocked).toBe(true);
-    expect(res.reason).toBe('unauthorized_user');
-  });
-
-  it('2. Caso A (Body Log & Workout): riconosce automaticamente sintassi 20(10,10,10,10), peso e calorie scrivendo direttamente in body_daily_logs e body_workout_entries', async () => {
-    const res = await processIncomingTelegramMessage({
-      chatId: 99887766,
-      fromUserId: 99887766,
-      text: 'Oggi peso 74.8kg, dormito 8 ore, 2450 kcal con 165g proteine. Trazioni 20(10,10,10,10) e Dips 25(8,8,8)',
-      mediaType: 'voice', // es. nota vocale trascritta
-      date: '2026-11-11',
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.intent).toBe('body_log');
-    expect(res.dailyLog.body_weight_kg).toBe(74.8);
-    expect(res.dailyLog.sleep_hours).toBe(8);
-    expect(res.dailyLog.calories_kcal).toBe(2450);
-    expect(res.workoutEntries.length).toBeGreaterThanOrEqual(2);
-    expect(res.replyText).toContain('Registrato in Sezione Body!');
-  });
-
-  it('3. Caso B (4° Livello di Protezione): per nuovi macro-domini (es. Cucina/Ricette) crea un record in telegram_pending_actions con Inline Keyboard e consolida nel Knowledge Graph solo al click di Conferma', async () => {
-    const nodesBefore = store.getAll('brain_nodes').length;
-
-    const res = await processIncomingTelegramMessage({
-      chatId: 99887766,
-      fromUserId: 99887766,
-      text: 'Ricetta Carbonara Perfetta: 4 tuorli, 200g guanciale croccante, 80g pecorino romano DOP e pepe nero in grani',
-      mediaType: 'text',
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.intent).toBe('new_open_domain');
-    expect(res.pendingAction).toBeDefined();
-    expect(res.pendingAction.status).toBe('pending');
-    expect(res.pendingAction.action_type).toBe('ingest_new_domain');
-
-    // Verifica presenza Inline Keyboard con callback_data confirm:<id> e reject:<id>
-    const buttons = res.inlineKeyboard[0];
-    expect(buttons[0].callback_data).toBe(`confirm:${res.pendingAction.id}`);
-    expect(buttons[1].callback_data).toBe(`reject:${res.pendingAction.id}`);
-
-    // Prima della conferma NON deve aver scritto alla cieca nel Knowledge Graph
-    expect(store.getAll('brain_nodes').length).toBe(nodesBefore);
-
-    // Simula il click dell'utente su [✅ Conferma e Salva]
-    const confirmed = await confirmTelegramPendingAction(res.pendingAction.id);
-    expect(confirmed.ok).toBe(true);
-    expect(confirmed.status).toBe('confirmed');
-    expect(confirmed.replyText).toContain('Salvato nel Second Brain!');
-
-    // Ora il nodo con dominio aperto ('cucina' / 'recipe') e la memoria con source_type = 'telegram' sono presenti
-    const allNodes = store.getAll('brain_nodes');
-    expect(allNodes.some(n => n.node_type === 'recipe' && n.label.toLowerCase().includes('carbonara'))).toBe(true);
-
-    const allMemories = store.getAll('brain_memories');
-    expect(allMemories.some(m => m.source_type === 'telegram' && m.domain === 'cucina')).toBe(true);
-
-    // Verifica anche il flusso di rifiuto [❌ Ignora] su una seconda azione pending
-    const resReject = await processIncomingTelegramMessage({
-      chatId: 99887766,
-      fromUserId: 99887766,
-      text: 'Investimento ETF S&P500: quota mensile PAC 500 euro su portafoglio azionario',
-    });
-    const rejected = rejectTelegramPendingAction(resReject.pendingAction.id);
-    expect(rejected.ok).toBe(true);
-    expect(rejected.status).toBe('rejected');
-  });
-
-  it('4. Proattività Scheduled (Morning Brief 08:30 & Evening Check 21:30) e URL Webhook Supabase', () => {
+  it('Il webhook del bot punta alla Edge Function del progetto Supabase', () => {
     expect(getTelegramWebhookUrl()).toBe('https://hbyqofpkkenzgbggvlch.supabase.co/functions/v1/telegram-webhook');
-
-    // In una giornata senza calorie/sonno inseriti, l'Evening Check (21:30) deve attivare il promemoria
-    const proactive = buildProactiveMessages('2026-11-11');
-    expect(proactive.morningBriefText).toContain('Buongiorno Antonio!');
-    expect(proactive.needsEveningReminder).toBe(true);
-    expect(proactive.eveningReminderText).toContain('calorie o il sonno');
   });
 });
 
@@ -1172,56 +1152,35 @@ describe('15. Coda Appunti & Ingestion Batching', () => {
     expect(buildBatchPrompt(store.getQueuedNotes())).toContain('3 note');
   });
 
-  it('3. senza chiavi IA il batch gira in locale a zero token e somma kcal/macro dei pasti della giornata', async () => {
+  it('3. il batch manda TUTTE le note in UNA sola chiamata e restituisce i risultati; senza IA dà un errore esplicito (nessun ripiego)', async () => {
     store.addQueuedNote('colazione 400 kcal');
     store.addQueuedNote('pranzo 700 kcal con 50g proteine');
     store.addQueuedNote('ho speso 30€ di hosting Vercel');
 
+    const fn = stubAi({
+      summary: 'Pasti e una spesa',
+      body_log: { date: '2026-11-11', calories_kcal: 1100, protein_g: 50, workout_entries: [] },
+      finance_transactions: [{ type: 'expense', amount: 30, description: 'Hosting Vercel', category: 'Server & Hosting', date: '2026-11-11' }],
+    });
     const result = await processNoteQueueBatch(store.getQueuedNotes());
-    expect(result.source).toBe('local_heuristic');
-    expect(result.aiCalls).toBe(0);
+    const generateCalls = fn.mock.calls.filter(([u]) => String(u).includes(':generateContent'));
+    expect(generateCalls).toHaveLength(1);
+    expect(result.aiCalls).toBe(1);
+    expect(JSON.stringify(JSON.parse(generateCalls[0][1].body).contents)).toContain('3 note');
     expect(result.body_log.calories_kcal).toBe(1100);
-    expect(result.body_log.protein_g).toBe(50);
     expect(result.finance_transactions[0]).toMatchObject({ type: 'expense', amount: 30, category: 'Server & Hosting' });
-    expect(result.summary).toContain('3 note');
+    expect(store.getQueuedNotes()).toHaveLength(3); // restano in coda finché non confermi
+
+    vi.unstubAllGlobals();
+    store.updateSettings({ gemini_api_key: '' });
+    await expect(processNoteQueueBatch(store.getQueuedNotes())).rejects.toMatchObject({ code: 'not_configured' });
+    expect(store.getQueuedNotes()).toHaveLength(3);
   });
 
-  it('4. Telegram: /queue accoda, /digest elabora tutto in blocco, applica i risultati e svuota la coda (solo utente autorizzato)', async () => {
-    store.updateSettings({ telegram_allowed_user_id: '99887766' });
-    const ctx = { chatId: 99887766, fromUserId: 99887766 };
-
+  it('4. i comandi /queue e /digest vengono riconosciuti (il bot vero è provato in tests/telegram-e2e.test.js)', () => {
     expect(parseTelegramCommand('/queue@MioBot ciao mondo')).toEqual({ name: 'queue', args: 'ciao mondo' });
     expect(parseTelegramCommand('/digest')).toEqual({ name: 'digest', args: '' });
     expect(parseTelegramCommand('Pull Up 20(10,10)')).toBeNull();
-
-    // utente non autorizzato: nessuna nota accodata
-    const blocked = processIncomingTelegramMessage({ chatId: 1, fromUserId: 1, text: '/queue spia' });
-    expect(blocked.ok).toBe(false);
-    expect(store.getQueuedNotes()).toHaveLength(0);
-
-    expect(processIncomingTelegramMessage({ ...ctx, text: '/queue' }).intent).toBe('queue_help');
-    expect(processIncomingTelegramMessage({ ...ctx, text: '/digest' }).replyText).toContain('vuota');
-
-    const r1 = processIncomingTelegramMessage({ ...ctx, text: '/queue Pull Up 20(10,10,10,10), peso 75.1kg', date: '2026-11-11' });
-    processIncomingTelegramMessage({ ...ctx, text: '/queue ho speso 45€ di benzina' });
-    processIncomingTelegramMessage({ ...ctx, text: '/queue Devo richiamare Marco' });
-    expect(r1.intent).toBe('queue_add');
-    expect(r1.note.source).toBe('telegram');
-    expect(store.getQueuedNotes()).toHaveLength(3);
-    expect(store.getBodyColumns().length).toBeGreaterThan(0);
-
-    const digest = processIncomingTelegramMessage({ ...ctx, text: '/digest' });
-    expect(digest.intent).toBe('digest');
-    expect(digest.notesCount).toBe(3);
-
-    const done = await digest.run();
-    expect(done.notesCount).toBe(3);
-    expect(done.replyText).toContain('Digest completato');
-    expect(done.replyText).toContain('1 chiamata');
-    expect(store.getQueuedNotes()).toHaveLength(0);
-    expect(store.getAll('finance_transactions').some(t => t.type === 'expense' && t.amount === 45)).toBe(true);
-    expect(store.getAll('todos').some(t => /Marco/.test(t.title))).toBe(true);
-    expect(store.getAll('body_workout_entries').length).toBeGreaterThan(0);
   });
 });
 
@@ -1321,27 +1280,38 @@ describe('16. Profili Specializzati & modalità "Avvocato del Diavolo"', () => {
     expect(res.critique.buffer_percent).toEqual({ min: 25, max: 35 });
   });
 
-  it('3b. se l\'IA è configurata ma NON risponde (modello sparito) il risultato lo dichiara: engine "local" + motivo, mai fallback silenzioso', async () => {
+  it('3b. se l\'IA NON risponde (modello sparito, non configurata) l\'app lancia un errore con il motivo: niente ripiego a regole locali', async () => {
+    clearModelCache();
     store.updateSettings({ gemini_api_key: 'TEST_KEY' });
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404, text: async () => JSON.stringify({ error: { message: 'models/gemini-1.5-flash is not found' } }) })));
 
-    const res = await processAiPrompt({ prompt: 'Devo richiamare Marco domani' });
-    expect(res.engine).toBe('local');
-    expect(res.source).toBe('local_heuristic');
-    expect(res.aiError).toMatchObject({ code: 'model_unavailable' });
-    expect(res.aiError.message).toMatch(/non è più disponibile/);
-    expect(res.todos.length).toBeGreaterThan(0); // il lavoro con regole semplici resta utile, ma dichiarato
+    await expect(processAiPrompt({ prompt: 'Devo richiamare Marco domani' })).rejects.toMatchObject({ code: 'model_unavailable' });
+    await expect(processAiPrompt({ prompt: 'Devo richiamare Marco domani' })).rejects.toThrow(/non è più disponibile/);
 
-    // senza alcuna configurazione: dichiarato come "non configurata"
+    // senza alcuna configurazione: errore "non configurata"
+    vi.unstubAllGlobals();
     store.updateSettings({ gemini_api_key: '' });
-    const none = await processAiPrompt({ prompt: 'Devo richiamare Marco domani' });
-    expect(none.aiError).toMatchObject({ code: 'not_configured' });
+    await expect(processAiPrompt({ prompt: 'Devo richiamare Marco domani' })).rejects.toMatchObject({ code: 'not_configured' });
   });
 
-  it('4. senza IA la critica è a zero token: ore implicite vs ore produttive, buffer 25-35% e nessuna proposta operativa', async () => {
+  it('3c. se Google non risponde entro il tempo limite l\'errore è "timeout" (prima la funzione restava appesa per minuti)', async () => {
+    clearModelCache();
+    store.updateSettings({ gemini_api_key: 'TEST_KEY' });
+    setGeminiTimeout(80);
+    vi.stubGlobal('fetch', vi.fn((url, init = {}) => new Promise((_, reject) => {
+      init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    })));
+    try {
+      await expect(processAiPrompt({ prompt: 'Devo richiamare Marco domani' })).rejects.toMatchObject({ code: 'timeout' });
+    } finally {
+      setGeminiTimeout(40000);
+    }
+  });
+
+  it('4. con l\'Avvocato del Diavolo le azioni operative vengono scartate e, se il modello non dà la critica, arriva quella calcolata sui dati reali (buffer 25-35%)', async () => {
+    stubAi({ summary: 'Valutazione', todos: [{ title: 'Da non creare' }], appointments: [{ title: 'Neppure questo', start_time: '2026-11-20T10:00:00' }], critique: null });
     const res = await processAiPrompt({ prompt: 'Ti sembra fattibile un e-commerce a 3000€ in 10 giorni?', devilsAdvocate: true, activeModule: 'quotes' });
-    expect(res.source).toBe('local_heuristic');
-    expect(res.aiCalls).toBe(0);
+    expect(res.engine).toBe('ai');
     expect(res.todos).toHaveLength(0);
     expect(res.appointments).toHaveLength(0);
     expect(res.critique.risks.join(' ')).toMatch(/scadenza irrealistica/i);
@@ -1405,18 +1375,14 @@ describe('20. Second Brain: proponi → anteprima → conferma, con motore sempr
     expect(res.memory.embedding).toHaveLength(768);
   });
 
-  it('2. senza IA o con IA guasta la proposta è "local" + motivo (poco affidabile); l\'estrattore semplice non inventa più chiavi dalle frasi', async () => {
-    const none = await proposeKnowledge({ text: NOTE, domain: 'client' });
-    expect(none.engine).toBe('local');
-    expect(none.error.code).toBe('not_configured');
-    expect(none.facts.some(f => /entito|ho_sentito|marco_rossi_di/i.test(f.fact_key))).toBe(false);
-    expect(extractKnowledgeLocally('Stack: Next.js\nCanone: 300 euro', 'client').facts.length).toBeGreaterThan(0); // le vere etichette "chiave: valore" funzionano ancora
+  it('2. senza IA o con IA guasta NON si salva e NON si inventa nulla: errore esplicito con il motivo', async () => {
+    clearModelCache();
+    store.updateSettings({ gemini_api_key: '' });
+    await expect(proposeKnowledge({ text: NOTE, domain: 'client' })).rejects.toMatchObject({ code: 'not_configured' });
 
     store.updateSettings({ gemini_api_key: 'TEST_KEY' });
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: 'quota' } }) })));
-    const broken = await proposeKnowledge({ text: NOTE, domain: 'client' });
-    expect(broken.engine).toBe('local');
-    expect(broken.error.code).toBe('quota');
-    expect(broken.error.message).toMatch(/limite di richieste/);
+    await expect(proposeKnowledge({ text: NOTE, domain: 'client' })).rejects.toThrow(/limite di richieste/);
+    expect(store.getAll('brain_memories')).toHaveLength(0);
   });
 });

@@ -258,10 +258,7 @@ function openBrainPreview({ args, proposal, onSaved }) {
   const host = document.createElement('div');
   const facts = proposal.facts || [];
   const edges = proposal.edges || [];
-  const engineBox = proposal.engine === 'ai'
-    ? `<div class="notice ok">✅ Letto dall'IA${proposal.model ? ` (${escapeHtml(proposal.model)})` : ''}. Controlla e conferma.</div>`
-    : `<div class="notice warn"><strong>⚠️ Non ha lavorato l'IA.</strong> ${escapeHtml(proposal.error?.message || 'Uso regole semplici.')}<br>
-        Le regole semplici trovano pochi dati. Puoi salvare lo stesso il testo come nota, oppure sistemare l'IA in Impostazioni → Verifica IA.</div>`;
+  const engineBox = `<div class="notice ok">✅ Letto dall'IA${proposal.model ? ` (${escapeHtml(proposal.model)})` : ''}. Controlla e conferma.</div>`;
 
   host.innerHTML = `
     <div class="modal-overlay" id="brain-preview-overlay">
@@ -1045,7 +1042,7 @@ function bindBrainEvents(container, router) {
           },
         });
       } catch (err) {
-        alert('Non sono riuscito a leggere il testo: ' + err.message);
+        alert('❌ L\'IA non ha risposto, non ho salvato nulla.\n\n' + err.message + '\n\nIl testo è ancora nella casella. Controlla Impostazioni → Verifica IA.');
         if (submitBtn) {
           submitBtn.disabled = false;
           submitBtn.textContent = 'Memorizza';

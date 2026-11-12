@@ -4,8 +4,9 @@
 
 import { icon } from '../utils/icons.js';
 import { store } from '../services/store.js';
-import { showToast } from '../utils/toast.js';
+import { showToast, showToastWithAction } from '../utils/toast.js';
 import { openAiModal } from './ai-assistant.js';
+import { processAiPrompt, applyAiResultToStore, undoAiResult } from '../services/ai.js';
 
 export const NAV = [
   { route: 'dashboard', label: 'Oggi', icon: 'dashboard' },
@@ -87,6 +88,55 @@ export function buildShell() {
   }
 }
 
+/** Riassunto in italiano di cosa è stato salvato, per il messaggio con "Annulla". */
+function describeApplied(a) {
+  const bits = [];
+  if (a.finance) bits.push(`${a.finance} ${a.finance === 1 ? 'movimento' : 'movimenti'}`);
+  if (a.trading) bits.push(`${a.trading} ${a.trading === 1 ? 'articolo' : 'articoli'}`);
+  if (a.todos) bits.push(`${a.todos} ${a.todos === 1 ? 'cosa da fare' : 'cose da fare'}`);
+  if (a.appointments) bits.push(`${a.appointments} in calendario`);
+  if (a.body) bits.push(a.workouts ? `diario corpo (${a.workouts} esercizi)` : 'diario corpo');
+  return bits.join(' · ');
+}
+
+/**
+ * Scrivi e invia: si salva SUBITO e per 5 secondi c'è "Annulla".
+ * Niente finestra di conferma: per l'uso di tutti i giorni è solo attrito in più.
+ */
+export async function runInbox(text, router) {
+  const pending = showToast('Sto leggendo…', 'info', 60000);
+  try {
+    const result = await processAiPrompt({ prompt: text, activeModule: router?.currentRoute || null });
+    pending?.remove?.();
+
+    const applied = applyAiResultToStore(result);
+    const summary = describeApplied(applied);
+    router?.refresh?.();
+
+    if (!summary) {
+      const extra = applied.clientsPending ? ` Ho visto ${applied.clientsPending} possibile cliente: confermalo in Clienti.` : '';
+      showToast(`Non ho trovato niente da salvare in: "${text.slice(0, 60)}".${extra}`, 'info', 6000);
+      return;
+    }
+
+    showToastWithAction(`Salvato: ${summary}`, 'Annulla', () => {
+      undoAiResult(applied.undo);
+      router?.refresh?.();
+      showToast('Annullato.', 'info', 2500);
+    }, { durationMs: 5000 });
+  } catch (err) {
+    pending?.remove?.();
+    // L'IA non ha risposto: niente inventato, il testo torna nella casella così non lo riscrivi
+    const inputEl = document.getElementById('inbox-input');
+    if (inputEl && !inputEl.value) inputEl.value = text;
+    showToastWithAction(`L'IA non ha risposto: ${err.message}`, 'Metti da parte', () => {
+      store.addQueuedNote(text, 'web');
+      if (inputEl && inputEl.value === text) inputEl.value = '';
+      showToast('Messa da parte: la elaboro quando vuoi.', 'success', 3000);
+    }, { type: 'error', durationMs: 12000 });
+  }
+}
+
 /**
  * Collega la casella Inbox e i tasti della barra in basso.
  * - Invio / "Invia": apre l'assistente con il testo già scritto e lo elabora subito.
@@ -99,12 +149,12 @@ export function wireInbox(router) {
   const chip = document.getElementById('inbox-queue-chip');
   const onSaved = () => router.refresh();
 
-  form?.addEventListener('submit', (e) => {
+  form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = input.value.trim();
     if (!text) { openAiModal({ onSaved }); return; }
     input.value = '';
-    openAiModal({ initialText: text, autoRun: true, onSaved });
+    await runInbox(text, router);
   });
 
   queueBtn?.addEventListener('click', () => {

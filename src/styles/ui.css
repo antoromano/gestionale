@@ -111,3 +111,43 @@ body.is-loading .app-container { opacity: .5; pointer-events: none; }
 @media (min-width: 1024px) {
   .bottom-nav { display: none; }
 }
+
+/* ---------- Toast con "Annulla" (salva subito, torni indietro in 5 secondi) ---------- */
+.toast { font-size: 14px; padding: 13px 18px; }
+.toast.success { background: #15803d; color: #fff; }
+.toast.error { background: #b91c1c; color: #fff; }
+.toast.info { background: #1c1b1a; color: #fff; }
+
+.toast.toast-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: relative;
+  overflow: hidden;
+  padding-right: 10px;
+  font-weight: 600;
+}
+.toast-undo {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, .18);
+  border: 1px solid rgba(255, 255, 255, .32);
+  color: inherit;
+  font: inherit;
+  font-weight: 650;
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.toast-undo:hover { background: rgba(255, 255, 255, .3); }
+.toast-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+  background: rgba(255, 255, 255, .55);
+  transform-origin: left center;
+  animation: toastCountdown linear forwards;
+}
+@keyframes toastCountdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }

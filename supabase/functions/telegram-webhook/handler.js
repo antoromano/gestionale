@@ -11,7 +11,7 @@
 // Dipendenze iniettate: { env, supabase, fetch } (in produzione arrivano da index.ts).
 
 import { parseWorkoutNotation, DEFAULT_BODY_COLUMNS } from './body-parser.js';
-import * as gemini from './gemini-core.js';
+import { generateStructured } from './ai-providers.js';
 
 const ok = (body = { ok: true }) => ({ status: 200, body });
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -258,10 +258,16 @@ usa "brain_note" solo per conoscenza da ricordare (ricette, fatti su clienti, re
 
 async function extractWithAi(deps, notes, date, media = []) {
   const parts = [{ text: `Data odierna: ${date}\n\nAPPUNTI:\n${notes.map((n, i) => `[${i + 1}] ${n}`).join('\n')}` }, ...media];
-  const { data, model } = await gemini.generate({
-    apiKey: deps.env.GEMINI_API_KEY || '', fetchFn: deps.fetch, env: deps.env, system: EXTRACTION_PROMPT, parts, temperature: 0.05,
+  const res = await generateStructured({
+    geminiKey: deps.env.GEMINI_API_KEY || '',
+    anthropicKey: deps.env.ANTHROPIC_API_KEY || '',
+    fetchFn: deps.fetch,
+    env: deps.env,
+    system: EXTRACTION_PROMPT,
+    parts,
+    temperature: 0.05,
   });
-  return { extraction: data, model };
+  return { extraction: res.data, model: res.model, provider: res.provider, ms: res.ms };
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +534,21 @@ export async function handleUpdate(update, deps) {
     if (!deps.env.TELEGRAM_BOT_TOKEN || !chat) return { status: 400, body: { ok: false, error: 'Configura TELEGRAM_BOT_TOKEN e TELEGRAM_ALLOWED_USER_ID nei Secrets di Supabase.' } };
     const res = await tg.send(chat, '🟢 <b>Gestionale connesso!</b>\n' + HELP);
     return ok({ ok: Boolean(res?.ok), telegram_response: res });
+  }
+
+  // Telegram rimanda lo stesso messaggio se non riceve subito una conferma: senza questo controllo
+  // una spesa poteva finire salvata due volte. Ogni aggiornamento si elabora una volta sola.
+  if (update?.update_id !== undefined && update?.update_id !== null) {
+    const seen = await deps.supabase
+      .from('telegram_processed_updates')
+      .insert({ update_id: update.update_id })
+      .select('update_id')
+      .single();
+    if (seen.error) {
+      const duplicate = /duplicate key|already exists|23505/i.test(seen.error.message || '');
+      if (duplicate) return ok({ ok: true, duplicate: true });
+      console.warn('telegram: controllo doppioni non riuscito:', seen.error.message);
+    }
   }
 
   const msg = update?.message || update?.edited_message;

@@ -62,6 +62,8 @@ import {
   composeSystemInstruction,
   buildBatchPrompt,
   processNoteQueueBatch,
+  applyAiResultToStore,
+  undoAiResult,
 } from '../src/services/ai.js';
 
 
@@ -1389,5 +1391,50 @@ describe('20. Second Brain: proponi → anteprima → conferma, con motore sempr
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 429, text: async () => JSON.stringify({ error: { message: 'quota' } }) })));
     await expect(proposeKnowledge({ text: NOTE, domain: 'client' })).rejects.toThrow(/limite di richieste/);
     expect(store.getAll('brain_memories')).toHaveLength(0);
+  });
+});
+
+describe('22. Salva subito con "Annulla": nessuna finestra di conferma nell\'uso quotidiano', () => {
+  beforeEach(() => {
+    store.clearAll();
+  });
+
+  it('1. quello che l\'IA ha capito viene salvato subito, e "Annulla" riporta tutto com\'era', () => {
+    const risultato = {
+      finance_transactions: [{ type: 'expense', amount: 45, description: 'Benzina', category: 'Trasporti & Viaggi', date: '2026-11-12' }],
+      todos: [{ title: 'Richiamare Marco', priority: 'media' }],
+      appointments: [],
+      trading_items: [],
+      clients_to_create: [],
+    };
+
+    const applied = applyAiResultToStore(risultato);
+    expect(applied.finance).toBe(1);
+    expect(applied.todos).toBe(1);
+    expect(store.getAll('finance_transactions')).toHaveLength(1);
+    expect(store.getAll('todos')).toHaveLength(1);
+
+    undoAiResult(applied.undo);
+    expect(store.getAll('finance_transactions')).toHaveLength(0);
+    expect(store.getAll('todos')).toHaveLength(0);
+    // e nemmeno nel cestino: annullare non lascia tracce da ripulire a mano
+    expect(store.getAllTrash()).toHaveLength(0);
+  });
+
+  it('2. "Annulla" su un diario corpo già esistente lo riporta ai valori di prima, non lo cancella', () => {
+    store.upsertBodyDailyLog({ date: '2026-11-12', body_weight_kg: 75.0, sleep_hours: 8 });
+
+    const applied = applyAiResultToStore({
+      body_log: { date: '2026-11-12', body_weight_kg: 74.2, calories_kcal: 2500, workout_entries: [{ column_id: 'col-pull-up', raw_notation: '20(10,10)' }] },
+      finance_transactions: [], todos: [], appointments: [], trading_items: [], clients_to_create: [],
+    });
+    expect(store.getAll('body_daily_logs')[0].body_weight_kg).toBe(74.2);
+    expect(store.getAll('body_workout_entries')).toHaveLength(1);
+
+    undoAiResult(applied.undo);
+    const log = store.getAll('body_daily_logs').find(l => l.date === '2026-11-12');
+    expect(log.body_weight_kg).toBe(75.0); // il peso di prima è tornato
+    expect(log.sleep_hours).toBe(8);
+    expect(store.getAll('body_workout_entries')).toHaveLength(0); // l'esercizio aggiunto è sparito
   });
 });

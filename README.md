@@ -151,13 +151,16 @@ Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header del
 - **Una sola fonte di verità: Supabase.** Il browser tiene solo una copia veloce (cache) e sincronizza da solo (`src/services/cloud.js`): invia le modifiche, riceve quelle fatte altrove (es. da Telegram) in tempo reale, e mostra sempre lo stato in alto ("Sincronizzato", "Offline", "Errore").
 - **Accesso con email e password** (Supabase Auth). Il database accetta **un solo utente**: il primo che si registra; ogni altro tentativo viene rifiutato (migrazione `007`/`008`). I dati senza proprietario vengono adottati dal primo utente.
 - **Telegram** (`supabase/functions/telegram-webhook`): risponde "✅" solo se il database ha confermato la scrittura; ogni salvataggio ha il tasto *Annulla*. Risponde solo al proprietario (`TELEGRAM_ALLOWED_USER_ID`).
+- **Due fornitori IA in fila (niente attese infinite)**: prima Gemini con il modello "lite" e il ragionamento spento (tetto 5 secondi), poi — se tarda o dà errore — **Claude (Anthropic)**. Chi ha risposto è sempre dichiarato. Nelle Impostazioni, *Verifica IA* controlla entrambi.
+- **Telegram senza doppioni e senza attesa**: il bot conferma subito a Telegram e lavora in sottofondo; ogni messaggio viene elaborato una volta sola (registro `telegram_processed_updates`, migrazione `009`).
+- **Nell'app si salva subito, con "Annulla" per 5 secondi**: niente finestra di conferma nell'uso quotidiano.
 - **Solo IA, niente regole di ripiego**: assistente, Second Brain e Telegram usano esclusivamente Gemini. Se non risponde compare l'errore con il motivo (e su Telegram il messaggio viene messo in coda) — nessun dato viene indovinato da espressioni regolari.
 - **IA**: la chiave sta solo sul server (secret `GEMINI_API_KEY`). Il modello viene scoperto dinamicamente (niente nomi di modello scritti nel codice). Se l'IA non risponde l'app lo dice chiaramente, non finge. *Impostazioni → Verifica IA* controlla tutto.
 - **Second Brain**: prima mostra "Cosa ho capito" e salva solo dopo la tua conferma.
 - **Inbox unico** in alto: scrivi qualsiasi cosa e Invio; "Da parte" mette la nota in coda per elaborarla in blocco con una sola richiesta IA.
 
 ### Segreti da impostare su Supabase (Edge Functions → Secrets)
-`GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, `TELEGRAM_WEBHOOK_SECRET` (opzionale). Mai nel codice o in chat.
+`GEMINI_API_KEY`, `ANTHROPIC_API_KEY` (riserva), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`. Opzionali: `GEMINI_MODEL`, `ANTHROPIC_MODEL` (per forzare un modello). Mai nel codice o in chat.
 
 ### Edge Functions: codice condiviso
 `src/services/gemini-core.js` è la copia canonica; `node scripts/sync-edge-shared.mjs` la copia nelle funzioni. Un test verifica che non ci siano differenze.
@@ -181,7 +184,7 @@ Supabase Free + Vercel Hobby bastano (uso personale). Attenzione: Supabase Free 
 2. Copia ed esegui il file `supabase/migrations/002_storage_buckets.sql` per configurare i bucket:
    - `quote-attachments`: Privato, max 5 MB, supporta JPEG, PNG, WebP. Accesso concesso solo all'utente proprietario.
    - `business-assets`: Per loghi aziendali.
-3. Esegui in ordine le migration successive (`003`…`008`; `007` e `008` introducono sincronizzazione, blocco a utente unico e realtime). La `006_finances_and_queue.sql` crea `finance_transactions`, `trading_items` (con `net_profit` e `roi_percent` come colonne generate) e `ai_note_queue`, tutte con RLS.
+3. Esegui in ordine le migration successive (`003`…`009`; `007` e `008` introducono sincronizzazione, blocco a utente unico e realtime). La `006_finances_and_queue.sql` crea `finance_transactions`, `trading_items` (con `net_profit` e `roi_percent` come colonne generate) e `ai_note_queue`, tutte con RLS.
 
 ### 3. Distribuzione Edge Functions
 Assicurati di avere la CLI di Supabase installata (`supabase login`):

@@ -39,8 +39,9 @@ function makeFetch({ models = MODELS_OK, generateResponse = null, generateStatus
 }
 
 const withAi = (env = {}) => ({ ...env, GEMINI_API_KEY: 'KEY' });
+let updateSeq = 0;
 const textMsg = (text, extra = {}) => ({
-  update_id: 1,
+  update_id: ++updateSeq,
   message: { message_id: 10, date: Math.floor(Date.parse('2026-11-11T09:00:00Z') / 1000), chat: { id: OWNER_TG }, from: { id: OWNER_TG, username: 'antonio' }, text, ...extra },
 });
 const lastText = log => log.telegram.filter(t => t.method === 'sendMessage').pop()?.text || '';
@@ -133,7 +134,7 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
     expect(fake.tables.body_workout_entries).toHaveLength(1);
 
     const data = log.telegram.filter(t => t.method === 'sendMessage').pop().reply_markup.inline_keyboard[0][0].callback_data;
-    const res = await handleUpdate({ callback_query: { id: 'cb1', from: { id: OWNER_TG }, data, message: { chat: { id: OWNER_TG }, message_id: 5 } } }, deps);
+    const res = await handleUpdate({ update_id: ++updateSeq, callback_query: { id: 'cb1', from: { id: OWNER_TG }, data, message: { chat: { id: OWNER_TG }, message_id: 5 } } }, deps);
     expect(res.body.status).toBe('undone');
     expect(fake.tables.body_workout_entries).toHaveLength(0);
     expect(fake.tables.body_daily_logs).toHaveLength(0);
@@ -199,11 +200,25 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
     const confirmData = sent.reply_markup.inline_keyboard[0][0].callback_data;
     expect(fake.tables.brain_memories).toHaveLength(0); // niente alla cieca
 
-    const res = await handleUpdate({ callback_query: { id: 'cb', from: { id: OWNER_TG }, data: confirmData, message: { chat: { id: OWNER_TG }, message_id: 3 } } }, deps);
+    const res = await handleUpdate({ update_id: ++updateSeq, callback_query: { id: 'cb', from: { id: OWNER_TG }, data: confirmData, message: { chat: { id: OWNER_TG }, message_id: 3 } } }, deps);
     expect(res.body.status).toBe('confirmed');
     expect(fake.tables.brain_memories[0]).toMatchObject({ user_id: owner, source_type: 'telegram' });
     expect(fake.tables.brain_nodes[0].user_id).toBe(owner);
     expect(fake.tables.brain_facts[0].user_id).toBe(owner);
+  });
+
+  it('9b. lo stesso messaggio inviato due volte da Telegram (stesso update_id) viene salvato UNA volta sola', async () => {
+    const { fn, log } = makeFetch({ generateResponse: { finance_transactions: [{ type: 'expense', amount: 45, description: 'Benzina', category: 'Trasporti', date: '2026-11-11' }] } });
+    const deps = { env: withAi(baseEnv), supabase: fake.service(), fetch: fn };
+    const update = textMsg('ho speso 45 euro di benzina');
+
+    const first = await handleUpdate(update, deps);
+    const second = await handleUpdate(update, deps); // Telegram rimanda lo stesso aggiornamento
+
+    expect(first.body.ok).toBe(true);
+    expect(second.body.duplicate).toBe(true);
+    expect(fake.tables.finance_transactions).toHaveLength(1); // nessun doppione
+    expect(log.gemini).toHaveLength(1); // e nessuna seconda chiamata all'IA pagata a vuoto
   });
 
   it('10. parseCommand riconosce solo i comandi del bot', () => {

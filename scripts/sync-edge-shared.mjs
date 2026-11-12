@@ -7,6 +7,8 @@ const COPIES = [
   ['src/utils/body-parser.js', 'supabase/functions/telegram-webhook/body-parser.js'],
   ['src/services/gemini-core.js', 'supabase/functions/telegram-webhook/gemini-core.js'],
   ['src/services/gemini-core.js', 'supabase/functions/gemini-assistant/gemini-core.js'],
+  ['src/services/ai-providers.js', 'supabase/functions/telegram-webhook/ai-providers.js'],
+  ['src/services/ai-providers.js', 'supabase/functions/gemini-assistant/ai-providers.js'],
 ];
 
 export const HEADER = (from) => `// COPIA GENERATA da ${from} con scripts/sync-edge-shared.mjs: NON modificare qui.\n`;

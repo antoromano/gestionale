@@ -79,12 +79,12 @@ export async function aiEmbed(text) {
   throw edgeError || new core.GeminiError('not_configured', 'IA non configurata.');
 }
 
-/** Diagnostica per Impostazioni: quale modello userà e se la chiave funziona davvero. */
+/** Diagnostica per Impostazioni: quali modelli userà, se le chiavi funzionano e se c'è la riserva. */
 export async function aiDiagnose() {
   const localKey = store.getSettings().gemini_api_key;
   try {
     const res = await viaEdge('diagnose', {});
-    if (res) return { ok: true, via: 'edge', generateModel: res.generateModel, embedModel: res.embedModel, probeOk: res.probeOk, timings: res.timings };
+    if (res) return { ok: true, via: 'edge', gemini: res.gemini || null, anthropic: res.anthropic || null };
   } catch (err) {
     if (!(err.code === 'no_api_key' && localKey)) return { ok: false, code: err.code, message: err.message };
   }

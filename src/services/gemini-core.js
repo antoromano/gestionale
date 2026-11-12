@@ -85,9 +85,10 @@ export function setGeminiMaxAttempts(n) { maxAttempts = n; }
  * risponde in pochi secondi, a volte resta appesa fino al limite — e in rari casi resta appesa DUE volte di
  * fila). Si riprova più di una volta, solo per timeout/rete (mai per errori come chiave non valida o quota).
  */
-async function request(fetchFn, url, apiKey, init = {}, model = '', timeoutMs = requestTimeoutMs) {
+async function request(fetchFn, url, apiKey, init = {}, model = '', timeoutMs = requestTimeoutMs, attempts = null) {
+  const tries = attempts ?? maxAttempts;
   let lastErr;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= tries; attempt++) {
     try {
       return await requestOnce(fetchFn, url, apiKey, init, model, timeoutMs);
     } catch (err) {
@@ -102,12 +103,12 @@ async function request(fetchFn, url, apiKey, init = {}, model = '', timeoutMs = 
 // Scoperta dei modelli
 // ---------------------------------------------------------------------------
 
-export async function listModels(apiKey, fetchFn = fetch) {
+export async function listModels(apiKey, fetchFn = fetch, { timeoutMs = undefined, attempts = null } = {}) {
   const models = [];
   let pageToken = '';
   for (let i = 0; i < 10; i++) {
     const url = `${API}/models?pageSize=200${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
-    const data = await request(fetchFn, url, apiKey, { method: 'GET' }, 'models.list');
+    const data = await request(fetchFn, url, apiKey, { method: 'GET' }, 'models.list', timeoutMs ?? requestTimeoutMs, attempts);
     models.push(...(data.models || []));
     if (!data.nextPageToken) break;
     pageToken = data.nextPageToken;
@@ -122,8 +123,12 @@ const versionOf = id => {
 
 const NOT_TEXT = /lite|image|tts|live|audio|native|thinking|vision|robotics|computer|embedding|exp(?:erimental)?\b|customtools|learnlm|gemma/i;
 
-/** Sceglie il modello di testo: override esplicito → alias "latest" → ultima versione stabile → ultima anteprima. */
-export function pickGenerateModel(models, override = '') {
+/**
+ * Sceglie il modello di testo: override esplicito → alias "latest" → ultima versione stabile → ultima anteprima.
+ * Con `fast: true` preferisce i modelli "lite": per estrarre una spesa o un allenamento bastano, sono più rapidi
+ * e molto meno affollati di quelli di punta (che danno "modello sovraccarico" proprio perché li usano tutti).
+ */
+export function pickGenerateModel(models, override = '', { fast = false } = {}) {
   const gen = models
     .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
     .map(m => String(m.name).replace(/^models\//, ''));
@@ -133,6 +138,16 @@ export function pickGenerateModel(models, override = '') {
       throw new GeminiError('model_unavailable', `Il modello impostato "${override}" non è disponibile. Modelli disponibili: ${gen.filter(g => /flash/.test(g)).slice(0, 8).join(', ') || 'nessuno'}.`);
     }
     return override;
+  }
+
+  if (fast) {
+    const byVersionDesc = (a, b) => versionOf(b) - versionOf(a) || a.localeCompare(b);
+    if (gen.includes('gemini-flash-lite-latest')) return 'gemini-flash-lite-latest';
+    const liteStable = gen.filter(id => /^gemini-\d+(?:\.\d+)?-flash-lite$/.test(id)).sort(byVersionDesc);
+    if (liteStable.length) return liteStable[0];
+    const liteAny = gen.filter(id => /flash-lite/.test(id) && !/image|tts|live|audio|native|robotics|computer|embedding/i.test(id)).sort(byVersionDesc);
+    if (liteAny.length) return liteAny[0];
+    // nessun "lite": si prosegue con la scelta normale qui sotto
   }
 
   if (gen.includes('gemini-flash-latest')) return 'gemini-flash-latest';
@@ -166,13 +181,14 @@ export function pickEmbedModel(models, override = '') {
 }
 
 /** Elenco modelli con cache (30 min). */
-export async function resolveModels(apiKey, { fetchFn = fetch, env = {}, force = false } = {}) {
+export async function resolveModels(apiKey, { fetchFn = fetch, env = {}, force = false, timeoutMs = undefined, attempts = null } = {}) {
   const key = `${apiKey.slice(0, 6)}…${apiKey.slice(-4)}`;
   const hit = modelCache.get(key);
   if (!force && hit && Date.now() - hit.at < MODEL_CACHE_MS) return hit.value;
-  const models = await listModels(apiKey, fetchFn);
+  const models = await listModels(apiKey, fetchFn, { timeoutMs, attempts });
   const value = {
     generate: pickGenerateModel(models, env.GEMINI_MODEL || ''),
+    generateFast: pickGenerateModel(models, env.GEMINI_MODEL || '', { fast: true }),
     embed: (() => {
       try {
         return pickEmbedModel(models, env.GEMINI_EMBEDDING_MODEL || '');
@@ -216,17 +232,40 @@ export function parseJsonLoose(text) {
  * @param {{apiKey:string, fetchFn?:Function, env?:object, system?:string, parts:Array, temperature?:number, json?:boolean}} opts
  * @returns {Promise<{data:any, model:string}>}
  */
-export async function generate({ apiKey, fetchFn = fetch, env = {}, system = '', parts, temperature = 0.1, json = true }) {
+export async function generate({ apiKey, fetchFn = fetch, env = {}, system = '', parts, temperature = 0.1, json = true, timeoutMs = null, fast = false }) {
   if (!apiKey) throw new GeminiError('no_api_key', 'Chiave API Gemini non configurata.');
-  const { generate: model } = await resolveModels(apiKey, { fetchFn, env });
+
+  // Con un tetto di tempo (c'è un secondo fornitore pronto) si fa UN solo tentativo e il tempo residuo
+  // si divide fra elenco modelli e generazione: meglio passare presto a Claude che insistere.
+  const deadline = timeoutMs ? Date.now() + timeoutMs : null;
+  const left = () => Math.max(400, deadline - Date.now());
+  const resolved = await resolveModels(apiKey, {
+    fetchFn,
+    env,
+    ...(deadline ? { timeoutMs: Math.min(left(), Math.round(timeoutMs / 2)), attempts: 1 } : {}),
+  });
+  const model = fast ? (resolved.generateFast || resolved.generate) : resolved.generate;
 
   const body = {
     contents: [{ role: 'user', parts }],
-    generationConfig: { temperature, ...(json ? { responseMimeType: 'application/json' } : {}) },
+    generationConfig: {
+      temperature,
+      ...(json ? { responseMimeType: 'application/json' } : {}),
+      // Per estrarre dati non serve che il modello "pensi" prima di rispondere: è tempo in più e basta.
+      ...(fast ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+    },
   };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
 
-  const data = await request(fetchFn, `${API}/models/${model}:generateContent`, apiKey, { method: 'POST', body: JSON.stringify(body) }, model);
+  const data = await request(
+    fetchFn,
+    `${API}/models/${model}:generateContent`,
+    apiKey,
+    { method: 'POST', body: JSON.stringify(body) },
+    model,
+    deadline ? left() : requestTimeoutMs,
+    deadline ? 1 : null,
+  );
 
   const cand = data.candidates?.[0];
   if (!cand) {

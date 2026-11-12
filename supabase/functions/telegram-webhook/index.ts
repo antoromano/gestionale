@@ -32,11 +32,30 @@ serve(async (req) => {
   }
 
   const env: Record<string, string> = {};
-  for (const key of ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_ID", "GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_EMBEDDING_MODEL", "TIMEZONE"]) {
+  for (const key of ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_ID", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_MODEL", "GEMINI_EMBEDDING_MODEL", "ANTHROPIC_MODEL", "TIMEZONE"]) {
     env[key] = Deno.env.get(key) || "";
   }
 
   const supabase = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { status, body } = await handleUpdate(payload, { env, supabase, fetch });
-  return json(status, body);
+
+  // Le chiamate dal pannello Impostazioni vogliono la risposta vera: si attendono.
+  const isPanelCall = typeof payload === "object" && payload !== null && "action" in (payload as Record<string, unknown>);
+  if (isPanelCall) {
+    const { status, body } = await handleUpdate(payload, { env, supabase, fetch });
+    return json(status, body);
+  }
+
+  // Telegram vuole una conferma SUBITO: se tarda rimanda lo stesso messaggio e nascono i doppioni.
+  // Quindi si conferma all'istante e il lavoro vero prosegue in sottofondo (il bot scrive l'esito in chat).
+  const work = handleUpdate(payload, { env, supabase, fetch }).catch((err) => {
+    console.error("telegram-webhook (in sottofondo):", err);
+  });
+  // @ts-ignore EdgeRuntime esiste solo in produzione su Supabase, non in locale
+  if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+    // @ts-ignore
+    EdgeRuntime.waitUntil(work);
+  } else {
+    await work;
+  }
+  return json(200, { ok: true, accepted: true });
 });

@@ -531,9 +531,27 @@ export function renderSettings(container, router) {
       const typed = container.querySelector('#set-gemini-key')?.value.trim();
       if (typed && typed !== store.getSettings().gemini_api_key) store.updateSettings({ gemini_api_key: typed });
       const r = await aiDiagnose();
-      out.innerHTML = r.ok && r.probeOk !== false
-        ? `<div class="notice ok">✅ L'IA funziona (${r.via === 'edge' ? 'dal server' : 'chiave personale'}). Modello di testo: <strong>${r.generateModel || '?'}</strong>${r.embedModel ? `; ricerca per significato: <strong>${r.embedModel}</strong>` : ''}.</div>`
-        : `<div class="notice err">❌ L'IA non funziona: ${(r.message || 'risposta non valida').replace(/</g, '&lt;')}</div>`;
+      const esc = (t) => String(t ?? '').replace(/</g, '&lt;');
+      if (!r.ok && !r.gemini) {
+        out.innerHTML = `<div class="notice err">❌ L'IA non funziona: ${esc(r.message || 'risposta non valida')}</div>`;
+      } else if (r.via === 'direct') {
+        out.innerHTML = `<div class="notice ok">✅ L'IA funziona con la tua chiave personale. Modello: <strong>${esc(r.generateModel || '?')}</strong>.</div>`;
+      } else {
+        const line = (nome, d, ruolo) => {
+          if (!d) return '';
+          if (d.ok && d.probeOk !== false) {
+            return `<div class="notice ok">✅ <strong>${nome}</strong> (${ruolo}) funziona. Modello: <strong>${esc(d.generateModel || d.model || '?')}</strong>${d.ms ? ` — ${(d.ms / 1000).toFixed(1)}s` : ''}.</div>`;
+          }
+          const livello = ruolo === 'riserva' ? 'warn' : 'err';
+          return `<div class="notice ${livello}">${ruolo === 'riserva' ? '⚠️' : '❌'} <strong>${nome}</strong> (${ruolo}) non disponibile: ${esc(d.message || 'errore sconosciuto')}</div>`;
+        };
+        const geminiOk = r.gemini?.ok && r.gemini?.probeOk !== false;
+        const claudeOk = r.anthropic?.ok && r.anthropic?.probeOk !== false;
+        const verdetto = geminiOk || claudeOk
+          ? `<div class="notice ok"><strong>In sintesi:</strong> l'assistente funziona${geminiOk && claudeOk ? ', e se il primo si blocca entra in gioco la riserva.' : geminiOk ? ', ma senza riserva: se Gemini si blocca ti fermi.' : ' usando la riserva (Claude), perché Gemini non risponde.'}</div>`
+          : `<div class="notice err"><strong>In sintesi:</strong> nessun fornitore risponde, l'assistente non può funzionare.</div>`;
+        out.innerHTML = line('Gemini', r.gemini, 'principale') + line('Claude', r.anthropic, 'riserva') + verdetto;
+      }
     } catch (err) {
       out.innerHTML = `<div class="notice err">❌ ${String(err.message || err).replace(/</g, '&lt;')}</div>`;
     } finally {

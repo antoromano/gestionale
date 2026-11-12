@@ -375,6 +375,9 @@ export async function processNoteQueueBatch(notes = store.getQueuedNotes(), opti
  */
 export function applyAiResultToStore(result = {}) {
   const applied = { body: false, workouts: 0, finance: 0, trading: 0, todos: 0, appointments: 0, clientsPending: (result.clients_to_create || []).length };
+  // Traccia di cosa è stato toccato, per poter tornare indietro con "Annulla":
+  // before = null → riga creata (si cancella), before = oggetto → riga modificata (si ripristina com'era).
+  const undo = [];
 
   store.runBatch(() => {
     if (result.body_log) {
@@ -383,21 +386,32 @@ export function applyAiResultToStore(result = {}) {
       for (const key of ['body_weight_kg', 'sleep_hours', 'calories_kcal', 'protein_g', 'carbs_g', 'fat_g']) {
         if (bl[key] != null) daily[key] = bl[key];
       }
-      store.upsertBodyDailyLog(daily);
+      const beforeLog = store.getAll('body_daily_logs').find(l => l.date === bl.date) || null;
+      const savedLog = store.upsertBodyDailyLog(daily);
+      if (savedLog) undo.push({ collection: 'body_daily_logs', id: savedLog.id, before: beforeLog ? { ...beforeLog } : null });
+
       for (const w of bl.workout_entries || []) {
-        store.upsertBodyWorkoutEntry({ date: bl.date, column_id: w.column_id, raw_notation: w.raw_notation, parsed_blocks: w.parsed_blocks });
-        applied.workouts++;
+        const beforeEntry = store.getAll('body_workout_entries').find(e => e.date === bl.date && e.column_id === w.column_id) || null;
+        const savedEntry = store.upsertBodyWorkoutEntry({ date: bl.date, column_id: w.column_id, raw_notation: w.raw_notation, parsed_blocks: w.parsed_blocks });
+        if (savedEntry) {
+          undo.push({ collection: 'body_workout_entries', id: savedEntry.id, before: beforeEntry ? { ...beforeEntry } : null });
+          applied.workouts++;
+        }
       }
       applied.body = true;
     }
     if ((result.finance_transactions || []).length) {
-      applied.finance = store.createBatch('finance_transactions', result.finance_transactions).length;
+      const rows = store.createBatch('finance_transactions', result.finance_transactions);
+      applied.finance = rows.length;
+      for (const r of rows) undo.push({ collection: 'finance_transactions', id: r.id, before: null });
     }
     if ((result.trading_items || []).length) {
-      applied.trading = store.createBatch('trading_items', result.trading_items).length;
+      const rows = store.createBatch('trading_items', result.trading_items);
+      applied.trading = rows.length;
+      for (const r of rows) undo.push({ collection: 'trading_items', id: r.id, before: null });
     }
     for (const t of result.todos || []) {
-      store.create('todos', {
+      const row = store.create('todos', {
         title: t.title,
         client_id: t.client_id || null,
         due_date: t.due_date || null,
@@ -407,10 +421,11 @@ export function applyAiResultToStore(result = {}) {
         is_completed: false,
         source: 'ai',
       });
+      undo.push({ collection: 'todos', id: row.id, before: null });
       applied.todos++;
     }
     for (const a of result.appointments || []) {
-      store.create('appointments', {
+      const row = store.create('appointments', {
         title: a.title,
         client_id: a.client_id || null,
         start_time: a.start_time,
@@ -420,10 +435,27 @@ export function applyAiResultToStore(result = {}) {
         activity_type: a.activity_type || 'general',
         compensation_amount: a.compensation_amount || 0,
       });
+      undo.push({ collection: 'appointments', id: row.id, before: null });
       applied.appointments++;
     }
   });
+  applied.undo = undo;
   return applied;
+}
+
+/** Annulla quanto salvato da applyAiResultToStore: cancella le righe nuove e ripristina quelle modificate. */
+export function undoAiResult(undo = []) {
+  if (!Array.isArray(undo) || undo.length === 0) return 0;
+  let count = 0;
+  store.allowBulkDelete?.();
+  store.runBatch(() => {
+    for (const step of [...undo].reverse()) {
+      if (step.before) store.update(step.collection, step.id, step.before);
+      else store.permanentDelete(step.collection, step.id);
+      count++;
+    }
+  });
+  return count;
 }
 
 function normalizeAiResponse(data, existingClients, preselectedClientId, options = {}) {

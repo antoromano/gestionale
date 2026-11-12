@@ -16,7 +16,7 @@ const CHECKS = {
 };
 
 // Tabelle (oltre a quelle in CLOUD_SCHEMA) usate solo dal bot
-const EXTRA_TABLES = ['telegram_pending_actions', 'telegram_bot_subscribers'];
+const EXTRA_TABLES = ['telegram_pending_actions', 'telegram_bot_subscribers', 'telegram_processed_updates'];
 
 let uuidCounter = 0;
 const uuid = () => `00000000-0000-4000-8000-${String(++uuidCounter).padStart(12, '0')}`;
@@ -133,6 +133,11 @@ export function createFakeCloud() {
               : null;
             const err = validate(table, row, !existing);
             if (err) return { data: null, error: err };
+            // chiave primaria vera: due volte lo stesso update_id = errore, come in Postgres (serve per i doppioni Telegram)
+            if (q.op === 'insert' && table === 'telegram_processed_updates'
+                && rows.some(r => r.update_id === row.update_id)) {
+              return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint "telegram_processed_updates_pkey"` } };
+            }
             prepared.push({ row, existing });
           }
           for (const { row, existing } of prepared) {
@@ -142,7 +147,7 @@ export function createFakeCloud() {
               written.push(existing);
               emit(table, 'UPDATE', structuredClone(existing), old);
             } else {
-              const hasId = CLOUD_SCHEMA[table] ? Boolean(CLOUD_SCHEMA[table].id) : table !== 'telegram_bot_subscribers';
+              const hasId = CLOUD_SCHEMA[table] ? Boolean(CLOUD_SCHEMA[table].id) : !['telegram_bot_subscribers', 'telegram_processed_updates'].includes(table);
               const full = { id: hasId ? uuid() : undefined, created_at: tick(), updated_at: tick(), extra: CLOUD_SCHEMA[table]?.extra ? {} : undefined, ...row };
               if (!hasId) delete full.id;
               if (full.extra === undefined) delete full.extra;

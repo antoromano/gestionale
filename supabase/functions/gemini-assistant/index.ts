@@ -8,12 +8,12 @@
 // Azioni (POST JSON):
 //   { action: "generate", system?, parts: [{text}|{inline_data}], temperature?, json? }  → { ok, data, model, provider, ms }
 //   { action: "embed", text }                                                            → { ok, values, model }
-//   { action: "diagnose" }                                                               → { ok, gemini: {...}, anthropic: {...} }
+//   { action: "diagnose" }                                                               → { ok, openai: {...}, gemini: {...}, anthropic: {...} }
 // Errore: { ok: false, error: { code, message } } con HTTP 200 (così il client lo legge sempre e lo mostra).
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { embed, diagnose } from "./gemini-core.js";
-import { generateStructured, resolveAnthropicModel, anthropicGenerate } from "./ai-providers.js";
+import { generateStructured, resolveAnthropicModel, anthropicGenerate, resolveOpenAIModel, openaiGenerate } from "./ai-providers.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,10 +26,11 @@ const json = (body: unknown, status = 200) =>
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
+  const openaiKey = Deno.env.get("OPENAI_API_KEY") || "";
   const geminiKey = Deno.env.get("GEMINI_API_KEY") || "";
   const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") || "";
-  if (!geminiKey && !anthropicKey) {
-    return json({ ok: false, error: { code: "no_api_key", message: "Nessuna chiave IA configurata sul server (servono GEMINI_API_KEY o ANTHROPIC_API_KEY)." } });
+  if (!openaiKey && !geminiKey && !anthropicKey) {
+    return json({ ok: false, error: { code: "no_api_key", message: "Nessuna chiave IA configurata sul server (servono OPENAI_API_KEY, GEMINI_API_KEY o ANTHROPIC_API_KEY)." } });
   }
 
   let body: any;
@@ -43,13 +44,15 @@ serve(async (req) => {
     GEMINI_MODEL: Deno.env.get("GEMINI_MODEL") || "",
     GEMINI_EMBEDDING_MODEL: Deno.env.get("GEMINI_EMBEDDING_MODEL") || "",
     ANTHROPIC_MODEL: Deno.env.get("ANTHROPIC_MODEL") || "",
+    OPENAI_MODEL: Deno.env.get("OPENAI_MODEL") || "",
+    OPENAI_TRANSCRIBE_MODEL: Deno.env.get("OPENAI_TRANSCRIBE_MODEL") || "",
   };
 
   try {
     if (body.action === "generate") {
       const parts = Array.isArray(body.parts) ? body.parts : [{ text: String(body.prompt || "") }];
       const res = await generateStructured({
-        geminiKey, anthropicKey, env, fetchFn: fetch,
+        openaiKey, geminiKey, anthropicKey, env, fetchFn: fetch,
         system: String(body.system || "").slice(0, 60000), parts,
         temperature: typeof body.temperature === "number" ? body.temperature : 0.1,
         json: body.json !== false,
@@ -65,6 +68,18 @@ serve(async (req) => {
 
     if (body.action === "diagnose") {
       const out: Record<string, unknown> = {};
+      if (openaiKey) {
+        try {
+          const t0 = Date.now();
+          const model = await resolveOpenAIModel(openaiKey, { fetchFn: fetch, env, force: true });
+          const probe = await openaiGenerate({ apiKey: openaiKey, env, fetchFn: fetch, parts: [{ text: 'Rispondi con questo JSON: {"ok":true}' }], timeoutMs: 20000 });
+          out.openai = { ok: true, model, probeOk: probe.data?.ok === true, ms: Date.now() - t0 };
+        } catch (err: any) {
+          out.openai = { ok: false, code: err?.code || "unavailable", message: err?.message };
+        }
+      } else {
+        out.openai = { ok: false, code: "no_api_key", message: "OPENAI_API_KEY non configurata." };
+      }
       if (geminiKey) {
         try {
           out.gemini = { ok: true, ...(await diagnose({ apiKey: geminiKey, env, fetchFn: fetch })) };

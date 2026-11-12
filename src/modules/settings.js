@@ -537,20 +537,22 @@ export function renderSettings(container, router) {
       } else if (r.via === 'direct') {
         out.innerHTML = `<div class="notice ok">✅ L'IA funziona con la tua chiave personale. Modello: <strong>${esc(r.generateModel || '?')}</strong>.</div>`;
       } else {
-        const line = (nome, d, ruolo) => {
-          if (!d) return '';
+        // Solo i fornitori con la chiave configurata sono "in gioco"; l'ordine è OpenAI → Gemini → Claude.
+        const attivi = [['OpenAI', r.openai], ['Gemini', r.gemini], ['Claude', r.anthropic]].filter(([, d]) => d && d.code !== 'no_api_key');
+        const righe = attivi.map(([nome, d], i) => {
+          const ruolo = i === 0 ? 'principale' : 'riserva';
           if (d.ok && d.probeOk !== false) {
             return `<div class="notice ok">✅ <strong>${nome}</strong> (${ruolo}) funziona. Modello: <strong>${esc(d.generateModel || d.model || '?')}</strong>${d.ms ? ` — ${(d.ms / 1000).toFixed(1)}s` : ''}.</div>`;
           }
-          const livello = ruolo === 'riserva' ? 'warn' : 'err';
-          return `<div class="notice ${livello}">${ruolo === 'riserva' ? '⚠️' : '❌'} <strong>${nome}</strong> (${ruolo}) non disponibile: ${esc(d.message || 'errore sconosciuto')}</div>`;
-        };
-        const geminiOk = r.gemini?.ok && r.gemini?.probeOk !== false;
-        const claudeOk = r.anthropic?.ok && r.anthropic?.probeOk !== false;
-        const verdetto = geminiOk || claudeOk
-          ? `<div class="notice ok"><strong>In sintesi:</strong> l'assistente funziona${geminiOk && claudeOk ? ', e se il primo si blocca entra in gioco la riserva.' : geminiOk ? ', ma senza riserva: se Gemini si blocca ti fermi.' : ' usando la riserva (Claude), perché Gemini non risponde.'}</div>`
-          : `<div class="notice err"><strong>In sintesi:</strong> nessun fornitore risponde, l'assistente non può funzionare.</div>`;
-        out.innerHTML = line('Gemini', r.gemini, 'principale') + line('Claude', r.anthropic, 'riserva') + verdetto;
+          return `<div class="notice ${i === 0 ? 'err' : 'warn'}">${i === 0 ? '❌' : '⚠️'} <strong>${nome}</strong> (${ruolo}) non disponibile: ${esc(d.message || 'errore sconosciuto')}</div>`;
+        });
+        const funzionanti = attivi.filter(([, d]) => d.ok && d.probeOk !== false).map(([nome]) => nome);
+        let verdetto;
+        if (!attivi.length) verdetto = '<div class="notice err"><strong>In sintesi:</strong> nessuna chiave IA è configurata sul server.</div>';
+        else if (!funzionanti.length) verdetto = '<div class="notice err"><strong>In sintesi:</strong> nessun fornitore risponde, l\'assistente non può funzionare.</div>';
+        else if (funzionanti[0] === attivi[0][0]) verdetto = `<div class="notice ok"><strong>In sintesi:</strong> l'assistente funziona con <strong>${funzionanti[0]}</strong>${funzionanti.length > 1 ? ', e se si blocca entra la riserva.' : attivi.length > 1 ? '' : ', ma senza riserva: se si blocca ti fermi.'}</div>`;
+        else verdetto = `<div class="notice warn"><strong>In sintesi:</strong> il principale non risponde: sta lavorando la riserva (<strong>${funzionanti[0]}</strong>).</div>`;
+        out.innerHTML = righe.join('') + verdetto;
       }
     } catch (err) {
       out.innerHTML = `<div class="notice err">❌ ${String(err.message || err).replace(/</g, '&lt;')}</div>`;

@@ -84,7 +84,7 @@ export async function aiDiagnose() {
   const localKey = store.getSettings().gemini_api_key;
   try {
     const res = await viaEdge('diagnose', {});
-    if (res) return { ok: true, via: 'edge', gemini: res.gemini || null, anthropic: res.anthropic || null };
+    if (res) return { ok: true, via: 'edge', openai: res.openai || null, gemini: res.gemini || null, anthropic: res.anthropic || null };
   } catch (err) {
     if (!(err.code === 'no_api_key' && localKey)) return { ok: false, code: err.code, message: err.message };
   }

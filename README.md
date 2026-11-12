@@ -151,7 +151,7 @@ Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header del
 - **Una sola fonte di verità: Supabase.** Il browser tiene solo una copia veloce (cache) e sincronizza da solo (`src/services/cloud.js`): invia le modifiche, riceve quelle fatte altrove (es. da Telegram) in tempo reale, e mostra sempre lo stato in alto ("Sincronizzato", "Offline", "Errore").
 - **Accesso con email e password** (Supabase Auth). Il database accetta **un solo utente**: il primo che si registra; ogni altro tentativo viene rifiutato (migrazione `007`/`008`). I dati senza proprietario vengono adottati dal primo utente.
 - **Telegram** (`supabase/functions/telegram-webhook`): risponde "✅" solo se il database ha confermato la scrittura; ogni salvataggio ha il tasto *Annulla*. Risponde solo al proprietario (`TELEGRAM_ALLOWED_USER_ID`).
-- **Due fornitori IA in fila (niente attese infinite)**: prima Gemini con il modello "lite" e il ragionamento spento (tetto 5 secondi), poi — se tarda o dà errore — **Claude (Anthropic)**. Chi ha risposto è sempre dichiarato. Nelle Impostazioni, *Verifica IA* controlla entrambi.
+- **Fornitori IA in fila (niente attese infinite)**: si usano quelli con la chiave sul server, in quest'ordine: **OpenAI** (modello "mini", scelto in automatico; trascrive anche i vocali), poi **Gemini** (modello "lite", ragionamento spento), poi **Claude**. Se uno non risponde entro il suo tetto di tempo o dà errore, subentra il successivo. Chi ha risposto è sempre dichiarato. Nelle Impostazioni, *Verifica IA* controlla entrambi.
 - **Telegram senza doppioni e senza attesa**: il bot conferma subito a Telegram e lavora in sottofondo; ogni messaggio viene elaborato una volta sola (registro `telegram_processed_updates`, migrazione `009`).
 - **Nell'app si salva subito, con "Annulla" per 5 secondi**: niente finestra di conferma nell'uso quotidiano.
 - **Solo IA, niente regole di ripiego**: assistente, Second Brain e Telegram usano esclusivamente Gemini. Se non risponde compare l'errore con il motivo (e su Telegram il messaggio viene messo in coda) — nessun dato viene indovinato da espressioni regolari.
@@ -160,7 +160,7 @@ Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header del
 - **Inbox unico** in alto: scrivi qualsiasi cosa e Invio; "Da parte" mette la nota in coda per elaborarla in blocco con una sola richiesta IA.
 
 ### Segreti da impostare su Supabase (Edge Functions → Secrets)
-`GEMINI_API_KEY`, `ANTHROPIC_API_KEY` (riserva), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`. Opzionali: `GEMINI_MODEL`, `ANTHROPIC_MODEL` (per forzare un modello). Mai nel codice o in chat.
+`OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` (ne basta una, meglio due: la seconda fa da riserva), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`. Opzionali: `OPENAI_MODEL`, `GEMINI_MODEL`, `ANTHROPIC_MODEL` (per forzare un modello). Mai nel codice o in chat.
 
 ### Edge Functions: codice condiviso
 `src/services/gemini-core.js` è la copia canonica; `node scripts/sync-edge-shared.mjs` la copia nelle funzioni. Un test verifica che non ci siano differenze.

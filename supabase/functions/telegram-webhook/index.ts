@@ -32,7 +32,7 @@ serve(async (req) => {
   }
 
   const env: Record<string, string> = {};
-  for (const key of ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_ID", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_MODEL", "GEMINI_EMBEDDING_MODEL", "ANTHROPIC_MODEL", "TIMEZONE"]) {
+  for (const key of ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_ID", "OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_MODEL", "OPENAI_TRANSCRIBE_MODEL", "GEMINI_MODEL", "GEMINI_EMBEDDING_MODEL", "ANTHROPIC_MODEL", "TIMEZONE"]) {
     env[key] = Deno.env.get(key) || "";
   }
 

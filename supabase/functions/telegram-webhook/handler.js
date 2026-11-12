@@ -259,6 +259,7 @@ usa "brain_note" solo per conoscenza da ricordare (ricette, fatti su clienti, re
 async function extractWithAi(deps, notes, date, media = []) {
   const parts = [{ text: `Data odierna: ${date}\n\nAPPUNTI:\n${notes.map((n, i) => `[${i + 1}] ${n}`).join('\n')}` }, ...media];
   const res = await generateStructured({
+    openaiKey: deps.env.OPENAI_API_KEY || '',
     geminiKey: deps.env.GEMINI_API_KEY || '',
     anthropicKey: deps.env.ANTHROPIC_API_KEY || '',
     fetchFn: deps.fetch,
@@ -353,7 +354,7 @@ async function handleCommand(deps, tg, owner, chatId, cmd, date) {
     ({ extraction } = await extractWithAi(deps, notes.map(n => n.content), date));
   } catch (err) {
     // Le note restano in coda: nessuna perdita
-    const why = err.code === 'no_api_key' ? 'La chiave Gemini non è configurata sul server.' : err.message;
+    const why = err.code === 'no_api_key' ? 'Nessuna chiave IA è configurata sul server.' : err.message;
     return tg.send(chatId, `❌ Digest non eseguito: ${esc(why)}\nLe ${notes.length} note restano in coda.`);
   }
   const result = await applyExtraction(deps, owner, extraction, date);
@@ -527,7 +528,7 @@ export async function handleUpdate(update, deps) {
   const tg = telegram(deps);
 
   if (update?.action === 'check_status') {
-    return ok({ ok: true, configured: Boolean(deps.env.TELEGRAM_BOT_TOKEN && deps.env.TELEGRAM_ALLOWED_USER_ID), has_bot_token: Boolean(deps.env.TELEGRAM_BOT_TOKEN), has_allowed_user: Boolean(deps.env.TELEGRAM_ALLOWED_USER_ID), has_gemini_key: Boolean(deps.env.GEMINI_API_KEY) });
+    return ok({ ok: true, configured: Boolean(deps.env.TELEGRAM_BOT_TOKEN && deps.env.TELEGRAM_ALLOWED_USER_ID), has_bot_token: Boolean(deps.env.TELEGRAM_BOT_TOKEN), has_allowed_user: Boolean(deps.env.TELEGRAM_ALLOWED_USER_ID), has_gemini_key: Boolean(deps.env.GEMINI_API_KEY), has_openai_key: Boolean(deps.env.OPENAI_API_KEY) });
   }
   if (update?.action === 'send_test_message') {
     const chat = deps.env.TELEGRAM_ALLOWED_USER_ID?.split(',')[0]?.trim();

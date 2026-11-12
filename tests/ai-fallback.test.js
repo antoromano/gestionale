@@ -4,6 +4,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   generateStructured,
+  openaiGenerate,
+  pickOpenAIModel,
+  pickOpenAITranscribeModel,
+  clearOpenAICache,
+  setOpenAIBudget,
   anthropicGenerate,
   pickAnthropicModel,
   partsToAnthropic,
@@ -75,6 +80,8 @@ describe('21. Due fornitori in fila: Gemini veloce, Claude di riserva', () => {
   beforeEach(() => {
     clearModelCache();
     clearAnthropicCache();
+    clearOpenAICache();
+    setOpenAIBudget(10000);
     setGeminiBudget(5000);
     setGeminiTimeout(15000);
   });
@@ -99,7 +106,7 @@ describe('21. Due fornitori in fila: Gemini veloce, Claude di riserva', () => {
 
     expect(res.provider).toBe('anthropic');
     expect(res.data).toEqual(ESTRAZIONE);
-    expect(res.fallbackReason).toMatch(/high demand|unavailable/i);
+    expect(res.fallbackReason).toMatch(/Gemini.*non risponde/i);
     expect(calls.anthropicMessages).toBe(1);
   });
 
@@ -176,5 +183,119 @@ describe('21. Due fornitori in fila: Gemini veloce, Claude di riserva', () => {
       : { ok: false, status: 401, text: async () => '' });
     await expect(anthropicGenerate({ apiKey: 'sk-ant-sbagliata', fetchFn: fn, parts: [{ text: 'x' }] }))
       .rejects.toMatchObject({ code: 'invalid_api_key' });
+  });
+
+  // ------------------------------------------------------------------ OpenAI
+  const OPENAI_MODELS = { data: [
+    { id: 'gpt-5.5' }, { id: 'gpt-5.5-mini' }, { id: 'gpt-5.5-mini-2026-04-01' }, { id: 'gpt-5.4-mini' }, { id: 'gpt-5.5-nano' },
+    { id: 'gpt-realtime-mini' }, { id: 'gpt-4o-mini-transcribe' }, { id: 'gpt-4o-transcribe' }, { id: 'gpt-4o-transcribe-diarize' },
+    { id: 'whisper-1' }, { id: 'text-embedding-3-small' }, { id: 'gpt-image-2' },
+  ] };
+
+  function makeOpenAIFetch({ openai = 'ok', rejectParams = [], gemini = 'ok' } = {}) {
+    const calls = { chat: 0, transcriptions: 0, geminiGenerate: 0, bodies: [] };
+    const base = makeFetch({ gemini });
+    const fn = async (url, init = {}) => {
+      const u = String(url);
+      if (u.includes('api.openai.com')) {
+        if (u.endsWith('/models')) return { ok: true, json: async () => OPENAI_MODELS };
+        if (u.includes('/audio/transcriptions')) {
+          calls.transcriptions++;
+          return { ok: true, json: async () => ({ text: 'ho speso 45 euro di benzina' }) };
+        }
+        if (u.includes('/chat/completions')) {
+          calls.chat++;
+          const body = JSON.parse(init.body || '{}');
+          calls.bodies.push(body);
+          if (openai === 'hang') return new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
+          if (openai === 'no_credit') return { ok: false, status: 429, text: async () => JSON.stringify({ error: { code: 'insufficient_quota', message: 'You exceeded your current quota, please check your plan and billing details.' } }) };
+          if (openai === 'error') return { ok: false, status: 500, text: async () => JSON.stringify({ error: { message: 'server error' } }) };
+          for (const param of rejectParams) {
+            if (param in body) return { ok: false, status: 400, text: async () => JSON.stringify({ error: { message: `Unsupported parameter: '${param}' is not supported with this model.` } }) };
+          }
+          return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(ESTRAZIONE) } }] }) };
+        }
+      }
+      return base.fn(url, init);
+    };
+    return { fn, calls, base: base.calls };
+  }
+
+  it('12. il modello OpenAI si sceglie dal suo elenco: il più recente "mini", senza versioni datate né modelli audio/immagini', () => {
+    expect(pickOpenAIModel(OPENAI_MODELS.data)).toBe('gpt-5.5-mini');
+    expect(pickOpenAIModel(OPENAI_MODELS.data, 'gpt-5.5')).toBe('gpt-5.5');
+    expect(() => pickOpenAIModel(OPENAI_MODELS.data, 'gpt-inesistente')).toThrow(/non è disponibile/);
+    expect(pickOpenAITranscribeModel(OPENAI_MODELS.data)).toBe('gpt-4o-mini-transcribe');
+    expect(pickOpenAITranscribeModel([{ id: 'whisper-1' }])).toBe('whisper-1');
+  });
+
+  it('13. con la chiave OpenAI risponde OpenAI per primo: Gemini e Claude non vengono nemmeno disturbati', async () => {
+    const { fn, calls, base } = makeOpenAIFetch();
+    const res = await generateStructured({ openaiKey: 'sk-oa', geminiKey: 'AIzaKEY1234', anthropicKey: 'sk-ant', fetchFn: fn, parts: [{ text: 'ho speso 45 euro di benzina' }] });
+    expect(res.provider).toBe('openai');
+    expect(res.model).toBe('gpt-5.5-mini');
+    expect(res.data).toEqual(ESTRAZIONE);
+    expect(calls.chat).toBe(1);
+    expect(base.geminiGenerate).toBe(0);
+    expect(base.anthropicMessages).toBe(0);
+  });
+
+  it('14. se OpenAI non risponde (credito finito, errore, appeso) subentra Gemini e poi Claude, e il motivo è scritto', async () => {
+    let t = makeOpenAIFetch({ openai: 'no_credit' });
+    let res = await generateStructured({ openaiKey: 'sk-oa', geminiKey: 'AIzaKEY1234', anthropicKey: 'sk-ant', fetchFn: t.fn, parts: [{ text: 'x' }] });
+    expect(res.provider).toBe('gemini');
+    expect(res.fallbackReason).toMatch(/credito OpenAI è finito/);
+
+    t = makeOpenAIFetch({ openai: 'error', gemini: 'error' });
+    res = await generateStructured({ openaiKey: 'sk-oa', geminiKey: 'AIzaKEY1234', anthropicKey: 'sk-ant', fetchFn: t.fn, parts: [{ text: 'x' }] });
+    expect(res.provider).toBe('anthropic');
+    expect(res.fallbackReason).toMatch(/OpenAI/);
+    expect(res.fallbackReason).toMatch(/Gemini/);
+
+    setOpenAIBudget(300);
+    t = makeOpenAIFetch({ openai: 'hang' });
+    const t0 = Date.now();
+    res = await generateStructured({ openaiKey: 'sk-oa', geminiKey: 'AIzaKEY1234', fetchFn: t.fn, parts: [{ text: 'x' }] });
+    expect(res.provider).toBe('gemini');
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it('15. se falliscono TUTTI l\'errore elenca il motivo di ciascuno (così si capisce cosa sistemare)', async () => {
+    setGeminiBudget(300);
+    const t = makeOpenAIFetch({ openai: 'no_credit', gemini: 'error' });
+    await expect(generateStructured({ openaiKey: 'sk-oa', geminiKey: 'AIzaKEY1234', fetchFn: t.fn, parts: [{ text: 'x' }] }))
+      .rejects.toThrow(/OpenAI.*credito.*Gemini/s);
+  });
+
+  it('16. modelli diversi accettano parametri diversi: quelli rifiutati vengono tolti da soli e la richiesta riesce comunque', async () => {
+    const t = makeOpenAIFetch({ rejectParams: ['reasoning_effort', 'max_completion_tokens'] });
+    const res = await generateStructured({ openaiKey: 'sk-oa', fetchFn: t.fn, parts: [{ text: 'ciao' }] });
+    expect(res.provider).toBe('openai');
+    expect(res.data).toEqual(ESTRAZIONE);
+    expect(t.calls.chat).toBeGreaterThan(1); // il primo tentativo è stato rifiutato, poi corretto
+    const ultimo = t.calls.bodies.at(-1);
+    expect('reasoning_effort' in ultimo).toBe(false);
+    expect('max_completion_tokens' in ultimo).toBe(false);
+  });
+
+  it('17. i vocali con OpenAI: prima trascritti, poi capiti; le foto passano come immagini', async () => {
+    const t = makeOpenAIFetch();
+    const vocale = [{ text: 'nota' }, { inline_data: { mime_type: 'audio/ogg', data: 'AAAA' } }];
+    const res = await generateStructured({ openaiKey: 'sk-oa', fetchFn: t.fn, parts: vocale });
+    expect(res.provider).toBe('openai');
+    expect(t.calls.transcriptions).toBe(1);
+    expect(JSON.stringify(t.calls.bodies[0].messages)).toContain('ho speso 45 euro di benzina');
+
+    const t2 = makeOpenAIFetch();
+    await generateStructured({ openaiKey: 'sk-oa', fetchFn: t2.fn, parts: [{ text: 'scontrino' }, { inline_data: { mime_type: 'image/jpeg', data: 'BBBB' } }] });
+    const contenuto = t2.calls.bodies[0].messages.at(-1).content;
+    expect(contenuto.find(c => c.type === 'image_url').image_url.url).toBe('data:image/jpeg;base64,BBBB');
+  });
+
+  it('18. chiave OpenAI sbagliata: messaggio chiaro', async () => {
+    const fn = async (url) => (String(url).endsWith('/models')
+      ? { ok: false, status: 401, text: async () => JSON.stringify({ error: { message: 'Incorrect API key provided' } }) }
+      : { ok: false, status: 401, text: async () => '' });
+    await expect(openaiGenerate({ apiKey: 'sk-sbagliata', fetchFn: fn, parts: [{ text: 'x' }] })).rejects.toMatchObject({ code: 'invalid_api_key' });
   });
 });

@@ -48,7 +48,7 @@ function mapHttpError(status, bodyText, model) {
 
 // Le risposte vere arrivano in pochi secondi: un tempo più corto fa scattare prima il nuovo tentativo
 // quando una connessione resta bloccata, invece di far aspettare l'utente fino al vecchio limite di 40s.
-let requestTimeoutMs = 20000;
+let requestTimeoutMs = 15000;
 /** Limite di attesa per ogni richiesta a Google (modificabile solo per i test). */
 export function setGeminiTimeout(ms) { requestTimeoutMs = ms; }
 
@@ -75,20 +75,27 @@ async function requestOnce(fetchFn, url, apiKey, init, model, timeoutMs) {
   }
 }
 
+// Quante volte riprovare quando la connessione resta bloccata senza risposta, prima di arrendersi
+// (modificabile solo per i test).
+let maxAttempts = 3;
+export function setGeminiMaxAttempts(n) { maxAttempts = n; }
+
 /**
- * A volte la connessione verso Google resta bloccata senza alcuna risposta (osservato in produzione: metà delle
- * richieste in ~5s, l'altra metà appesa fino al timeout) mentre un nuovo tentativo va a buon fine in pochi secondi.
- * Un solo nuovo tentativo, solo per timeout/rete (mai per errori come chiave non valida o quota).
+ * A volte la connessione verso Google resta bloccata senza alcuna risposta (osservato in produzione: a volte
+ * risponde in pochi secondi, a volte resta appesa fino al limite — e in rari casi resta appesa DUE volte di
+ * fila). Si riprova più di una volta, solo per timeout/rete (mai per errori come chiave non valida o quota).
  */
 async function request(fetchFn, url, apiKey, init = {}, model = '', timeoutMs = requestTimeoutMs) {
-  try {
-    return await requestOnce(fetchFn, url, apiKey, init, model, timeoutMs);
-  } catch (err) {
-    if (err.code === 'timeout' || err.code === 'network') {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
       return await requestOnce(fetchFn, url, apiKey, init, model, timeoutMs);
+    } catch (err) {
+      lastErr = err;
+      if (err.code !== 'timeout' && err.code !== 'network') throw err;
     }
-    throw err;
   }
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------------------

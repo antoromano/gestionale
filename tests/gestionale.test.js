@@ -1304,11 +1304,12 @@ describe('16. Profili Specializzati & modalità "Avvocato del Diavolo"', () => {
     vi.stubGlobal('fetch', fn);
     try {
       await expect(processAiPrompt({ prompt: 'Devo richiamare Marco domani' })).rejects.toMatchObject({ code: 'timeout' });
-      // ogni singola richiesta a Google (qui ce ne sono più di una: anche il contesto del Second Brain ne fa una) ha ricevuto un nuovo tentativo prima di arrendersi
-      expect(fn.mock.calls.length % 2).toBe(0);
-      expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
+      // ogni singola richiesta a Google (qui ce ne sono più di una: anche il contesto del Second Brain ne fa una)
+      // viene riprovata fino al limite prima di arrendersi — mai mollata al primo blocco
+      expect(fn.mock.calls.length % 3).toBe(0);
+      expect(fn.mock.calls.length).toBeGreaterThanOrEqual(3);
     } finally {
-      setGeminiTimeout(20000);
+      setGeminiTimeout(15000);
     }
   });
 

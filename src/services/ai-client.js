@@ -16,7 +16,7 @@ export function isAiConfigured() {
 async function viaEdge(action, body) {
   const client = getSupabase();
   if (!client) return null;
-  const timeoutMs = 90000; // il server puo impiegare fino a ~80s nel caso peggiore (elenco modelli + generazione, ciascuno con un nuovo tentativo)
+  const timeoutMs = 110000; // il server puo impiegare fino a ~90s nel caso peggiore (elenco modelli + generazione, ciascuno riprovato fino a 3 volte)
   const { data, error } = await Promise.race([
     client.functions.invoke('gemini-assistant', { body: { action, ...body } }),
     new Promise((_, rej) => setTimeout(() => rej(new core.GeminiError('timeout', `La funzione IA sul cloud non ha risposto entro ${timeoutMs / 1000} secondi.`)), timeoutMs)),

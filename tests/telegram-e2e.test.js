@@ -245,7 +245,29 @@ describe('19. Gemini: nessun nome di modello scritto nel codice, errori sempre e
       expect(res.data).toEqual({ ok: true });
       expect(calls).toBe(2); // un solo nuovo tentativo, e ha funzionato
     } finally {
-      setGeminiTimeout(20000);
+      setGeminiTimeout(15000);
+    }
+  });
+
+  it('1c. caso reale osservato in produzione (messaggio Telegram delle 16:40): la connessione resta bloccata DUE volte di fila; con un terzo tentativo si salva comunque', async () => {
+    setGeminiTimeout(50);
+    let calls = 0;
+    const f = async (url, init = {}) => {
+      if (String(url).includes('/models?')) return { ok: true, json: async () => ({ models: MODELS_OK }) };
+      calls++;
+      if (calls <= 2) {
+        return new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+        });
+      }
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] }) };
+    };
+    try {
+      const res = await generate({ apiKey: 'AIzaKEY1234', fetchFn: f, parts: [{ text: 'x' }] });
+      expect(res.data).toEqual({ ok: true });
+      expect(calls).toBe(3);
+    } finally {
+      setGeminiTimeout(15000);
     }
   });
 

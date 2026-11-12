@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { handleUpdate, isAuthorized, parseCommand } from '../supabase/functions/telegram-webhook/handler.js';
-import { pickGenerateModel, pickEmbedModel, generate, embed, GeminiError, clearModelCache, diagnose } from '../src/services/gemini-core.js';
+import { pickGenerateModel, pickEmbedModel, generate, embed, GeminiError, clearModelCache, diagnose, setGeminiTimeout } from '../src/services/gemini-core.js';
 import { store } from '../src/services/store.js';
 import { cloud } from '../src/services/cloud.js';
 import { createFakeCloud } from './helpers/fake-supabase.js';
@@ -224,6 +224,29 @@ describe('19. Gemini: nessun nome di modello scritto nel codice, errori sempre e
     expect(() => pickGenerateModel([{ name: 'models/gemini-1.5-flash', supportedGenerationMethods: [] }])).toThrow(/Nessun modello/);
     expect(() => pickGenerateModel(MODELS_OK, 'gemini-1.5-flash')).toThrow(/non è disponibile/);
     expect(pickEmbedModel(MODELS_OK)).toBe('gemini-embedding-001');
+  });
+
+  it('1b. caso reale osservato in produzione: la prima richiesta a Google resta appesa senza risposta, un nuovo tentativo automatico va a buon fine (non serve riprovare a mano)', async () => {
+    setGeminiTimeout(50); // nei test non serve aspettare il vero limite di produzione: solo confermare che si riprova
+    let calls = 0;
+    const f = async (url, init = {}) => {
+      if (String(url).includes('/models?')) return { ok: true, json: async () => ({ models: MODELS_OK }) };
+      calls++;
+      if (calls === 1) {
+        // prima chiamata: nessuna risposta finché non scade il tempo (il bug reale visto nei log di produzione)
+        return new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+        });
+      }
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] }) };
+    };
+    try {
+      const res = await generate({ apiKey: 'AIzaKEY1234', fetchFn: f, parts: [{ text: 'x' }] });
+      expect(res.data).toEqual({ ok: true });
+      expect(calls).toBe(2); // un solo nuovo tentativo, e ha funzionato
+    } finally {
+      setGeminiTimeout(20000);
+    }
   });
 
   it('2. errori mappati con codice e messaggio in italiano (chiave errata, modello sparito, quota, rete)', async () => {

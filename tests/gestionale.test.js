@@ -1294,17 +1294,21 @@ describe('16. Profili Specializzati & modalità "Avvocato del Diavolo"', () => {
     await expect(processAiPrompt({ prompt: 'Devo richiamare Marco domani' })).rejects.toMatchObject({ code: 'not_configured' });
   });
 
-  it('3c. se Google non risponde entro il tempo limite l\'errore è "timeout" (prima la funzione restava appesa per minuti)', async () => {
+  it('3c. se Google non risponde entro il tempo limite l\'errore è "timeout" (prima la funzione restava appesa per minuti); dopo un nuovo tentativo ancora appeso, l\'errore arriva comunque', async () => {
     clearModelCache();
     store.updateSettings({ gemini_api_key: 'TEST_KEY' });
     setGeminiTimeout(80);
-    vi.stubGlobal('fetch', vi.fn((url, init = {}) => new Promise((_, reject) => {
+    const fn = vi.fn((url, init = {}) => new Promise((_, reject) => {
       init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
-    })));
+    }));
+    vi.stubGlobal('fetch', fn);
     try {
       await expect(processAiPrompt({ prompt: 'Devo richiamare Marco domani' })).rejects.toMatchObject({ code: 'timeout' });
+      // ogni singola richiesta a Google (qui ce ne sono più di una: anche il contesto del Second Brain ne fa una) ha ricevuto un nuovo tentativo prima di arrendersi
+      expect(fn.mock.calls.length % 2).toBe(0);
+      expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
     } finally {
-      setGeminiTimeout(40000);
+      setGeminiTimeout(20000);
     }
   });
 

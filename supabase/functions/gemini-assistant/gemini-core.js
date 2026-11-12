@@ -47,11 +47,13 @@ function mapHttpError(status, bodyText, model) {
   return new GeminiError('bad_response', `Gemini ha risposto con un errore (${status}).`, short);
 }
 
-let requestTimeoutMs = 40000;
+// Le risposte vere arrivano in pochi secondi: un tempo più corto fa scattare prima il nuovo tentativo
+// quando una connessione resta bloccata, invece di far aspettare l'utente fino al vecchio limite di 40s.
+let requestTimeoutMs = 20000;
 /** Limite di attesa per ogni richiesta a Google (modificabile solo per i test). */
 export function setGeminiTimeout(ms) { requestTimeoutMs = ms; }
 
-async function request(fetchFn, url, apiKey, init = {}, model = '', timeoutMs = requestTimeoutMs) {
+async function requestOnce(fetchFn, url, apiKey, init, model, timeoutMs) {
   let res;
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
@@ -71,6 +73,22 @@ async function request(fetchFn, url, apiKey, init = {}, model = '', timeoutMs = 
     throw new GeminiError('network', 'Impossibile raggiungere Gemini: controlla la connessione.', err?.message);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * A volte la connessione verso Google resta bloccata senza alcuna risposta (osservato in produzione: metà delle
+ * richieste in ~5s, l'altra metà appesa fino al timeout) mentre un nuovo tentativo va a buon fine in pochi secondi.
+ * Un solo nuovo tentativo, solo per timeout/rete (mai per errori come chiave non valida o quota).
+ */
+async function request(fetchFn, url, apiKey, init = {}, model = '', timeoutMs = requestTimeoutMs) {
+  try {
+    return await requestOnce(fetchFn, url, apiKey, init, model, timeoutMs);
+  } catch (err) {
+    if (err.code === 'timeout' || err.code === 'network') {
+      return await requestOnce(fetchFn, url, apiKey, init, model, timeoutMs);
+    }
+    throw err;
   }
 }
 

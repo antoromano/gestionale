@@ -33,10 +33,12 @@ const ROUTE_ALIASES = {
   expenses: 'finances',
 };
 
-class Router {
+export class Router {
   constructor() {
     this.currentRoute = 'dashboard';
     this.routeParams = {};
+    this.historyStack = []; // rotte visitate prima di quella corrente: [{ route, params }]
+    this.subBack = null;    // "torna indietro" di una sottovista (es. Scheda Cliente → elenco)
     this.container = document.getElementById('app-main-content');
     this.pageTitle = document.getElementById('page-title-text');
     this.sidebar = document.getElementById('app-sidebar');
@@ -80,6 +82,10 @@ class Router {
       });
     }
 
+    // Pulsante "Indietro" nella barra in alto
+    this.backBtn = document.getElementById('top-back-btn');
+    this.backBtn?.addEventListener('click', () => this.goBack());
+
     // Backup quick actions
     document.getElementById('quick-backup-export')?.addEventListener('click', () => exportFullBackup());
     document.getElementById('quick-backup-import')?.addEventListener('click', () => openImportModal(document.body, this, () => this.refresh()));
@@ -97,9 +103,14 @@ class Router {
     this.navigate('dashboard');
   }
 
-  navigate(route, params = {}) {
+  navigate(route, params = {}, { fromBack = false } = {}) {
     route = ROUTE_ALIASES[route] || route;
     if (!this.routes[route]) route = 'dashboard';
+    if (!fromBack && route !== this.currentRoute) {
+      this.historyStack.push({ route: this.currentRoute, params: this.routeParams });
+      if (this.historyStack.length > 50) this.historyStack.shift();
+    }
+    this.subBack = null; // la vista che si apre, se è una sottovista, lo reimposta da sé
     this.currentRoute = route;
     this.routeParams = params;
 
@@ -120,7 +131,37 @@ class Router {
     // Renderizza la vista attiva
     this.routes[route].render(this.container, this, params);
     document.body.dataset.route = route;
+    this.updateBackButton();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  /** Una sottovista (es. Scheda Cliente) dichiara come tornare al proprio elenco. null = nessuna sottovista. */
+  setBack(fn) {
+    this.subBack = typeof fn === 'function' ? fn : null;
+    this.updateBackButton();
+  }
+
+  canGoBack() {
+    return Boolean(this.subBack) || this.historyStack.length > 0;
+  }
+
+  /** Torna indietro: prima esce dalla sottovista, poi risale la cronologia delle pagine. */
+  goBack() {
+    if (this.subBack) {
+      const fn = this.subBack;
+      this.subBack = null;
+      fn();
+      this.updateBackButton();
+      return true;
+    }
+    const prev = this.historyStack.pop();
+    if (!prev) { this.updateBackButton(); return false; }
+    this.navigate(prev.route, prev.params || {}, { fromBack: true });
+    return true;
+  }
+
+  updateBackButton() {
+    if (this.backBtn) this.backBtn.hidden = !this.canGoBack();
   }
 
   refresh() {

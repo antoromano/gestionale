@@ -151,3 +151,11 @@ body.is-loading .app-container { opacity: .5; pointer-events: none; }
   animation: toastCountdown linear forwards;
 }
 @keyframes toastCountdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+/* ---------- Pulsante "Indietro" e azioni rapide sulle righe ---------- */
+.top-back-btn { white-space: nowrap; flex-shrink: 0; }
+.top-back-btn[hidden] { display: none; }
+.row-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+.row-actions .btn { padding: 3px 7px; }
+.row-click { cursor: pointer; }
+.row-click:hover { border-color: var(--accent) !important; }

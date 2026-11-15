@@ -8,6 +8,7 @@ import { generateId } from '../utils/id.js';
 import { saveQuoteDraft, getQuoteDraft, deleteQuoteDraft } from '../utils/indexed-db.js';
 import { openPdfPrintWindow } from '../services/pdf.js';
 import { openQuoteManagerModal } from './quote-manager.js';
+import { showToast } from '../utils/toast.js';
 
 let quotesSearchQuery = '';
 let quotesStatusFilter = 'all';
@@ -117,6 +118,9 @@ export function renderQuotes(container, router, options = {}) {
                         <button class="btn btn-sm btn-secondary quote-pdf-btn" data-id="${q.id}" title="Stampa o Salva PDF">
                           📄 PDF
                         </button>
+                        <button class="btn btn-sm btn-secondary quote-duplicate-btn" data-id="${q.id}" title="Crea una copia in bozza con un nuovo numero">
+                          📋 Duplica
+                        </button>
                         <button class="btn btn-sm btn-danger quote-trash-btn" data-id="${q.id}" title="Cestina">
                           🗑️
                         </button>
@@ -177,6 +181,15 @@ export function renderQuotes(container, router, options = {}) {
     });
   });
 
+  // Duplica: nuova bozza con voci copiate e nuovo numero
+  container.querySelectorAll('.quote-duplicate-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const copy = store.duplicateQuote(btn.getAttribute('data-id'));
+      if (copy) showToast(`Copia creata: N. ${copy.quote.quote_number} (bozza)`, 'success');
+      renderQuotes(container, router);
+    });
+  });
+
   // Cestina
   container.querySelectorAll('.quote-trash-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -189,7 +202,13 @@ export function renderQuotes(container, router, options = {}) {
   });
 }
 
-function openPdfChoiceModal(details, parentContainer) {
+// L'editor si apre anche dalla Scheda Cliente e da Oggi: si ridisegna la pagina in cui ci si trova
+function rerenderAfterQuoteChange(parentContainer, router) {
+  if (router?.refresh) router.refresh();
+  else renderQuotes(parentContainer, router);
+}
+
+export function openPdfChoiceModal(details, parentContainer) {
   const modalContainer = parentContainer.querySelector('#quotes-modal-container') || document.body;
   const div = document.createElement('div');
   div.innerHTML = `
@@ -244,7 +263,7 @@ export async function openQuoteEditorModal(initialData, parentContainer, router)
   // Dati di partenza
   let quote = (hasDraft ? localDraft.quote : (initialData?.quote || initialData)) || {
     id: quoteId,
-    quote_number: `PREV-${new Date().getFullYear()}-${String(store.getAll('quotes').length + 1).padStart(3, '0')}`,
+    quote_number: store.nextQuoteNumber(),
     title: '',
     issue_date: new Date().toISOString().split('T')[0],
     valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
@@ -835,7 +854,7 @@ export async function openQuoteEditorModal(initialData, parentContainer, router)
     if (confirm('Vuoi davvero scartare la bozza locale e ripristinare i dati originali?')) {
       await deleteQuoteDraft(draftKey);
       div.remove();
-      renderQuotes(parentContainer, router);
+      rerenderAfterQuoteChange(parentContainer, router);
     }
   });
 
@@ -894,7 +913,7 @@ export async function openQuoteEditorModal(initialData, parentContainer, router)
       await deleteQuoteDraft(draftKey);
 
       closeModal();
-      renderQuotes(parentContainer, router);
+      rerenderAfterQuoteChange(parentContainer, router);
     } catch (err) {
       alert('Errore durante il salvataggio. La bozza locale è stata preservata.');
       console.error(err);

@@ -3,7 +3,7 @@
 // Persistenza: sincronizzazione cloud generica (cloud.js). IA: ai-client.js (modelli scoperti da Google, errori espliciti).
 // L'estrattore euristico locale resta disponibile ma è SEMPRE dichiarato come tale (engine: 'local').
 
-import { aiGenerate, aiEmbed, isAiConfigured, GeminiError } from './ai-client.js';
+import { aiGenerate, aiEmbed, aiEmbedBatch, isAiConfigured, GeminiError } from './ai-client.js';
 import { store } from './store.js';
 import { getSupabase } from './supabase.js';
 import {
@@ -123,14 +123,14 @@ export function cosineSimilarity(vecA, vecB) {
 }
 
 /**
- * Embedding a 768 dimensioni. `source` dichiara chi l'ha calcolato ('gemini' | 'local'): vettori di sorgenti diverse
+ * Embedding a 768 dimensioni. `source` dichiara chi l'ha calcolato ('openai' | 'gemini' | 'local'): vettori di sorgenti diverse
  * NON sono confrontabili, quindi la ricerca usa solo quelli della stessa sorgente.
  */
 export async function generateEmbeddingDetailed(text) {
   if (isAiConfigured()) {
     try {
-      const { values, model } = await aiEmbed(text);
-      return { values, source: 'gemini', model };
+      const { values, model, source } = await aiEmbed(text);
+      return { values, source: source || 'openai', model };
     } catch (err) {
       return { values: computeLocalEmbedding(text), source: 'local', error: { code: err.code, message: err.message } };
     }
@@ -204,31 +204,59 @@ export function upsertFact({
   category = 'status',
   confidence = 1.0,
   source_memory_id = null,
-}) {
+  source_document_id = null,
+}, { valid_from = null } = {}) {
   if (!subject || !fact_key || fact_value === undefined || fact_value === null) {
     return null;
   }
 
   const cleanSubject = String(subject).trim();
-  const cleanKey = String(fact_key)
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '_')
-    .replace(/[^a-z0-9_àèéìòù]/gi, '');
+  const cleanKey = normalizeFactKey(fact_key);
   const cleanValue = String(fact_value).trim();
   if (!cleanSubject || !cleanKey || !cleanValue) return null;
 
   const resolvedCategory = category && String(category).trim().length > 0 ? String(category).trim() : 'status';
   const nowIso = new Date().toISOString();
+  // Data a cui il fatto si riferisce: per una chat importata è la data VERA della chat, non quella dell'import
+  const parsedFrom = valid_from ? Date.parse(valid_from) : NaN;
+  const dated = Number.isFinite(parsedFrom);
+  const whenIso = dated ? new Date(parsedFrom).toISOString() : nowIso;
+  const origin = source_document_id ? { source_document_id } : {};
 
-  const allFacts = store.getAll('brain_facts', true);
-  const existingActive = allFacts.find(
+  const sameKey = store.getAll('brain_facts', true).filter(
     f =>
       !f.is_deleted &&
-      f.is_active !== false &&
       (f.subject || '').trim().toLowerCase() === cleanSubject.toLowerCase() &&
       (f.fact_key || '').trim().toLowerCase() === cleanKey.toLowerCase()
   );
+  const existingActive = sameKey.find(f => f.is_active !== false);
+  const startOf = f => Date.parse(f.valid_from || f.created_at || 0) || 0;
+
+  // INTEGRITÀ TEMPORALE: un'informazione vecchia (es. chat del 2023 importata oggi) non scavalca mai una più recente.
+  // Se esiste già un record successivo per la stessa chiave, quello vecchio entra direttamente nello storico.
+  if (dated) {
+    const newer = sameKey.filter(f => startOf(f) > parsedFrom).sort((a, b) => startOf(a) - startOf(b));
+    if (newer.length > 0) {
+      const sameValue = f => String(f.fact_value).trim().toLowerCase() === cleanValue.toLowerCase();
+      const already = sameKey.find(f => f.is_active === false && sameValue(f) && startOf(f) === parsedFrom);
+      if (already) return { ...already, action: 'unchanged', previousFact: null };
+      const next = newer[0];
+      const historical = store.create('brain_facts', {
+        subject: cleanSubject,
+        fact_key: cleanKey,
+        fact_value: cleanValue,
+        category: resolvedCategory,
+        confidence: Number(confidence) || 1.0,
+        is_active: false,
+        superseded_by: next.id,
+        valid_from: whenIso,
+        valid_to: next.valid_from || next.created_at || nowIso,
+        source_memory_id: source_memory_id || null,
+        ...origin,
+      });
+      return { ...historical, action: 'archived_historical', previousFact: null, newerFact: existingActive || next };
+    }
+  }
 
   // Caso 1: Esiste già un fatto attivo con lo stesso identico valore -> aggiorna solo updated_at
   if (existingActive && String(existingActive.fact_value).trim().toLowerCase() === cleanValue.toLowerCase()) {
@@ -249,9 +277,10 @@ export function upsertFact({
     confidence: Number(confidence) || 1.0,
     is_active: true,
     superseded_by: null,
-    valid_from: nowIso,
+    valid_from: whenIso,
     valid_to: null,
     source_memory_id: source_memory_id || null,
+    ...origin,
   });
 
   let supersededOld = null;
@@ -259,7 +288,7 @@ export function upsertFact({
   if (existingActive) {
     supersededOld = store.update('brain_facts', existingActive.id, {
       is_active: false,
-      valid_to: nowIso,
+      valid_to: whenIso,
       superseded_by: newFact.id,
     });
   }
@@ -269,6 +298,50 @@ export function upsertFact({
     action: existingActive ? 'superseded' : 'created',
     previousFact: supersededOld,
   };
+}
+
+export function normalizeFactKey(fact_key) {
+  return String(fact_key || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_àèéìòù]/gi, '');
+}
+
+/** Corregge un fatto sul posto (es. un errore di battitura) senza creare una nuova versione nello storico. */
+export function updateFact(factId, { subject, fact_key, fact_value, category } = {}) {
+  const existing = store.getById('brain_facts', factId);
+  if (!existing) return null;
+  const patch = {};
+  if (subject !== undefined && String(subject).trim()) patch.subject = String(subject).trim();
+  if (fact_key !== undefined && normalizeFactKey(fact_key)) patch.fact_key = normalizeFactKey(fact_key);
+  if (fact_value !== undefined && String(fact_value).trim()) patch.fact_value = String(fact_value).trim();
+  if (category !== undefined && String(category).trim()) patch.category = String(category).trim();
+  return store.update('brain_facts', factId, patch);
+}
+
+/**
+ * Elimina un fatto. Se era quello attivo e aveva sostituito una versione precedente, quella torna attiva
+ * (così eliminare un'informazione sbagliata non lascia il vuoto al posto di quella giusta di prima).
+ */
+export function deleteFact(factId) {
+  const existing = store.getById('brain_facts', factId);
+  if (!existing) return null;
+  const all = store.getAll('brain_facts', true);
+  const previous = all
+    .filter(f => f.superseded_by === factId && !f.is_deleted)
+    .sort((a, b) => String(b.valid_from || '').localeCompare(String(a.valid_from || '')));
+  let restored = null;
+  store.runBatch(() => {
+    if (existing.is_active !== false && previous[0]) {
+      restored = store.update('brain_facts', previous[0].id, { is_active: true, valid_to: null, superseded_by: null });
+    }
+    for (const p of previous) {
+      if (p.id !== previous[0]?.id || !restored) store.update('brain_facts', p.id, { superseded_by: restored ? restored.id : null });
+    }
+    store.permanentDelete('brain_facts', factId);
+  });
+  return { deleted: existing, restored };
 }
 
 /**
@@ -391,6 +464,85 @@ export function upsertGraphRelationship({
     targetNode,
     isNew: true,
   };
+}
+
+/** Modifica una memoria. Se cambiano titolo o testo il vettore di ricerca viene ricalcolato. */
+export async function updateMemory(memoryId, { title, content, domain, tags } = {}) {
+  const existing = store.getById('brain_memories', memoryId);
+  if (!existing) return null;
+  const patch = {};
+  if (title !== undefined) patch.title = String(title).trim();
+  if (content !== undefined && String(content).trim()) patch.content = String(content).trim();
+  if (domain !== undefined && String(domain).trim()) patch.domain = String(domain).trim();
+  if (tags !== undefined) {
+    patch.tags = (Array.isArray(tags) ? tags : String(tags).split(',')).map(t => String(t).trim()).filter(Boolean);
+  }
+  const textChanged = (patch.title !== undefined && patch.title !== existing.title) || (patch.content !== undefined && patch.content !== existing.content);
+  if (textChanged) {
+    const emb = await generateEmbeddingDetailed(`${patch.title ?? existing.title ?? ''}\n${patch.content ?? existing.content ?? ''}`);
+    patch.embedding = emb.values;
+    patch.embedding_source = emb.source;
+  }
+  return store.update('brain_memories', memoryId, patch);
+}
+
+/** Rinomina un nodo del grafo o ne cambia il tipo. */
+export function updateNode(nodeId, { label, node_type } = {}) {
+  const patch = {};
+  if (label !== undefined && String(label).trim()) patch.label = String(label).trim();
+  if (node_type !== undefined && String(node_type).trim()) patch.node_type = String(node_type).trim();
+  return store.update('brain_nodes', nodeId, patch);
+}
+
+/** Elimina un nodo e tutti i collegamenti che lo toccano (niente archi orfani). */
+export function deleteNode(nodeId) {
+  if (!store.getById('brain_nodes', nodeId)) return null;
+  const edges = store.getAll('brain_edges', true).filter(e => e.source_node_id === nodeId || e.target_node_id === nodeId);
+  store.runBatch(() => {
+    for (const e of edges) store.permanentDelete('brain_edges', e.id);
+    store.permanentDelete('brain_nodes', nodeId);
+  });
+  return { deletedEdges: edges.length };
+}
+
+export function updateEdge(edgeId, { relation_type, evidence, weight } = {}) {
+  const patch = {};
+  if (relation_type !== undefined) {
+    const clean = String(relation_type).trim().toUpperCase().replace(/\s+/g, '_').replace(/[^A-Z0-9_]/g, '');
+    if (clean) patch.relation_type = clean;
+  }
+  if (evidence !== undefined) patch.evidence = String(evidence).trim();
+  if (weight !== undefined && Number.isFinite(Number(weight))) patch.weight = Number(weight);
+  return store.update('brain_edges', edgeId, patch);
+}
+
+export function deleteEdge(edgeId) {
+  return store.permanentDelete('brain_edges', edgeId);
+}
+
+/**
+ * Ricalcola i vettori di ricerca di tutte le memorie (serve dopo il cambio di fornitore: i vettori calcolati
+ * da fornitori diversi non sono confrontabili). Richiede l'IA: se non risponde lancia l'errore e non tocca nulla.
+ * @returns {Promise<{total:number, updated:number, source:string|null}>}
+ */
+export async function recalculateAllEmbeddings({ onProgress = null, batchSize = 32 } = {}) {
+  if (!isAiConfigured()) throw new GeminiError('not_configured', 'L\'IA non è configurata: apri Impostazioni → Verifica IA.');
+  const memories = store.getAll('brain_memories', true).filter(m => m && (m.content || m.title));
+  let updated = 0;
+  let source = null;
+  for (let i = 0; i < memories.length; i += batchSize) {
+    const batch = memories.slice(i, i + batchSize);
+    const res = await aiEmbedBatch(batch.map(m => `${m.title || ''}\n${m.content || ''}`));
+    source = res.source;
+    store.runBatch(() => {
+      batch.forEach((m, k) => {
+        store.update('brain_memories', m.id, { embedding: res.vectors[k], embedding_source: res.source });
+        updated++;
+      });
+    });
+    onProgress?.({ done: Math.min(i + batchSize, memories.length), total: memories.length });
+  }
+  return { total: memories.length, updated, source };
 }
 
 /**

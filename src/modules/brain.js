@@ -9,16 +9,35 @@ import {
   proposeKnowledge,
   commitKnowledge,
   upsertFact,
+  updateFact,
+  deleteFact,
   invalidateFact,
-  upsertGraphRelationship,
-  querySecondBrain,
+  updateMemory,
+  updateNode,
+  deleteNode,
+  updateEdge,
+  deleteEdge,
   syncClientToBrain,
 } from '../services/brain.js';
 import { formatDateTime, escapeHtml } from '../utils/formatters.js';
 import { icon } from '../utils/icons.js';
 import { mountForceGraph3D, mountNeuralOrb3D, attachSpringTiltCards } from '../utils/three-scenes.js';
+import { openFormModal } from '../utils/form-modal.js';
+import { showToast } from '../utils/toast.js';
+import { mountBrainChat } from './brain-chat.js';
+import { mountBrainSources } from './brain-sources.js';
 
-let activeTab = 'facts'; // 'facts' | 'memories' | 'graph'
+const FACT_CATEGORIES = [
+  { value: 'rule', label: 'Regola (vale sempre nelle risposte)' },
+  { value: 'preference', label: 'Preferenza (vale sempre nelle risposte)' },
+  { value: 'status', label: 'Stato' },
+  { value: 'metric', label: 'Numero / misura' },
+  { value: 'client_info', label: 'Informazione su un cliente' },
+];
+const DOMAIN_OPTIONS = Object.entries(BRAIN_DOMAINS).map(([value, meta]) => ({ value, label: `${meta.icon} ${meta.label}` }));
+const NODE_TYPE_OPTIONS = Object.entries(NODE_TYPE_META).map(([value, meta]) => ({ value, label: `${meta.icon} ${meta.label}` }));
+
+let activeTab = 'ask'; // 'ask' | 'sources' | 'memories' | 'facts' | 'graph'
 let activeGraph3DInstance = null;
 let activeOrb3DInstance = null;
 let selectedDomainCapture = 'work';
@@ -28,7 +47,6 @@ let memorySearchText = '';
 let graphTypeFilter = 'all';
 let selectedGraphNodeId = null;
 let lastIngestFeedback = null;
-let lastQueryResponse = null;
 let expandedHistoryKey = null; // "subject::fact_key"
 
 export function renderBrain(container, router) {
@@ -39,217 +57,108 @@ export function renderBrain(container, router) {
     allClients.forEach(c => syncClientToBrain(c));
   }
 
-  const memories = store.getAll('brain_memories');
+  // Le "note" sono le memorie scritte a mano; i pezzi dei documenti importati si vedono nella scheda Fonti
+  const memories = store.getAll('brain_memories').filter(m => !m.document_id);
+  const documents = store.getAll('brain_documents');
   const activeFacts = store.getActiveFacts();
   const allFacts = store.getAll('brain_facts');
   const { nodes, edges } = store.getBrainGraph();
 
+  const tabs = [
+    { id: 'ask', label: 'Chiedi', count: null },
+    { id: 'sources', label: 'Fonti', count: documents.length },
+    { id: 'memories', label: 'Note', count: memories.length },
+    { id: 'facts', label: 'Fatti', count: activeFacts.length },
+    { id: 'graph', label: 'Mappa', count: nodes.length },
+  ];
+
   container.innerHTML = `
-    <!-- GUIDA COLLASSABILE (PROGRESSIVE DISCLOSURE) -->
     <details class="ux-guide-callout">
       <summary>
-        <span>${icon('info', 14)} Architettura Cognitiva Tri-Layer Ibrida (Come funziona il Second Brain)</span>
-        <span class="badge badge-gray mono">3 Livelli • GraphRAG</span>
+        <span>${icon('info', 14)} Come funziona il Second Brain</span>
       </summary>
       <div class="callout-body">
-        Il <strong>Second Brain</strong> opera su 3 livelli sincronizzati su Supabase PostgreSQL:
-        <strong>1. Archivio Semantico (pgvector 768-dim)</strong> per appunti e note vettoriali;
-        <strong>2. Fatti Atomici (Pattern Mem0)</strong> che aggiornano lo stato corrente mantenendo l'evoluzione storica;
-        <strong>3. Knowledge Graph Relazionale (3D Force-Directed + 2-Hop)</strong> per scoprire correlazioni dirette e indirette tra clienti, stack, decisioni e metriche Body.
+        <strong>Chiedi</strong>: fai una domanda e rispondo usando solo quello che so di te, mostrando le fonti.
+        <strong>Fonti</strong>: i documenti e le vecchie chat che hai importato.
+        <strong>Note</strong>: appunti scritti a mano.
+        <strong>Fatti</strong>: informazioni e regole stabili su di te (con lo storico di come sono cambiate).
+        <strong>Mappa</strong>: i collegamenti tra persone, clienti, strumenti e idee.
       </div>
     </details>
 
-    <!-- KPI STATISTICHE TRI-LAYER -->
-    <div class="grid-4" style="margin-bottom: 18px;">
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">Livello 1 • Memorie Semantiche</div>
-        <div class="mono" style="font-size: 24px; font-weight: 700; color: var(--text-main); margin-top: 4px;">${memories.length}</div>
-        <div style="font-size: 11px; color: var(--text-muted);">Embedding 768-dim & Tag GIN</div>
-      </div>
-
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">Livello 2 • Fatti Attivi (Mem0)</div>
-        <div class="mono" style="font-size: 24px; font-weight: 700; color: var(--success); margin-top: 4px;">${activeFacts.length}</div>
-        <div style="font-size: 11px; color: var(--text-muted);"><span class="mono">${allFacts.length - activeFacts.length}</span> versioni storiche archiviate</div>
-      </div>
-
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">Livello 3 • Nodi Knowledge Graph</div>
-        <div class="mono" style="font-size: 24px; font-weight: 700; color: #6d28d9; margin-top: 4px;">${nodes.length}</div>
-        <div style="font-size: 11px; color: var(--text-muted);">Entità tipizzate in 3D</div>
-      </div>
-
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">Livello 3 • Relazioni & Archi</div>
-        <div class="mono" style="font-size: 24px; font-weight: 700; color: var(--warning); margin-top: 4px;">${edges.length}</div>
-        <div style="font-size: 11px; color: var(--text-muted);">Connessioni pesate (2-Hop GraphRAG)</div>
-      </div>
-    </div>
-
-    <!-- SEZIONE 1 & 2: CATTURA COGNITIVA RAPIDA + INTERROGAZIONE IBRIDA -->
-    <div class="grid-2" style="margin-bottom: 18px;">
-      <!-- 1. CATTURA COGNITIVA RAPIDA ("Aggiungi al Second Brain") -->
-      <div class="card" style="margin-bottom: 0;">
-        <div class="card-header" style="margin-bottom: 12px;">
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <div id="brain-neural-orb-canvas" title="Nucleo Cognitivo 3D Interattivo (Three.js)" style="width: 44px; height: 44px; border-radius: 10px; background: #09090b; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(99,102,241,0.3);"></div>
-            <div>
-              <div class="card-title">Aggiungi al Second Brain</div>
-              <div style="font-size: 11.5px; color: var(--text-muted);">Estrae automaticamente Fatti (Mem0) e Relazioni del Grafo</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Scelta rapida dominio -->
-        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px;">
-          ${Object.entries(BRAIN_DOMAINS).map(([key, meta]) => `
-            <button
-              type="button"
-              class="btn btn-sm brain-domain-pill ${selectedDomainCapture === key ? 'btn-primary' : 'btn-secondary'}"
-              data-domain="${key}"
-              style="font-size: 11px; padding: 4px 10px;"
-            >
-              ${meta.icon} ${meta.label}
-            </button>
-          `).join('')}
-        </div>
-
-        <form id="brain-ingest-form">
-          <div class="form-row" style="margin-bottom: 10px;">
-            <div style="flex: 2;">
-              <input
-                type="text"
-                id="brain-ingest-title"
-                class="form-input"
-                placeholder="Titolo breve (opzionale, es. Architettura TechCorp o Allenamento Dorso)"
-              />
-            </div>
-            <div style="flex: 1;">
-              <input
-                type="text"
-                id="brain-ingest-tags"
-                class="form-input"
-                placeholder="Tag (es. supabase, mrr, pullup)"
-              />
-            </div>
-          </div>
-
-          <div class="form-group" style="margin-bottom: 12px;">
-            <textarea
-              id="brain-ingest-text"
-              class="form-textarea"
-              rows="3"
-              required
-              placeholder="Scrivi o detta un appunto... Es: 'TechCorp usa Next.js e Supabase, canone MRR 450€/mese.' oppure 'Massimale pull-up: 16 ripetizioni, target kcal: 2450 kcal.'"
-            ></textarea>
-          </div>
-
-          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
-            <button type="button" id="brain-voice-dictate-btn" class="btn btn-sm btn-secondary">
-              ${icon('mic', 13)} <span>Dettatura Vocale</span>
-            </button>
-            <button type="submit" id="brain-ingest-submit-btn" class="btn btn-ai">
-              ${icon('sparkles', 14)} <span>Memorizza</span>
-            </button>
-          </div>
-        </form>
-
-        <!-- Feedback immediato estrazione Tri-Layer -->
-        ${lastIngestFeedback ? renderIngestFeedbackBanner(lastIngestFeedback) : ''}
-      </div>
-
-      <!-- 2. INTERROGAZIONE IBRIDA ("Chiedi al Second Brain") -->
-      <div class="card" style="margin-bottom: 0; display: flex; flex-direction: column;">
-        <div class="card-header" style="margin-bottom: 12px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            ${icon('network', 18)}
-            <div>
-              <div class="card-title">Chiedi al Second Brain (Hybrid GraphRAG)</div>
-              <div style="font-size: 11.5px; color: var(--text-muted);">Interroga Memorie Vettoriali, Fatti Attivi Mem0 e Grafo a 2 Hop</div>
-            </div>
-          </div>
-        </div>
-
-        <form id="brain-query-form" style="margin-bottom: 10px;">
-          <div style="display: flex; gap: 8px;">
-            <input
-              type="text"
-              id="brain-query-input"
-              class="form-input"
-              placeholder="Chiedi su clienti, stack, decisioni, metriche body o correlazioni..."
-              value="${lastQueryResponse?.query || ''}"
-            />
-            <button type="submit" class="btn btn-primary">
-              ${icon('search', 14)} <span>Chiedi</span>
-            </button>
-          </div>
-        </form>
-
-        <!-- Suggerimenti rapidi di query -->
-        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px;">
-          <span style="font-size: 11px; color: var(--text-muted); align-self: center;">Query rapide:</span>
-          <button type="button" class="btn btn-sm btn-secondary quick-brain-query" data-q="Qual è lo stack e il canone dei clienti?" style="font-size: 11px; padding: 2px 8px;">Stack & MRR Clienti</button>
-          <button type="button" class="btn btn-sm btn-secondary quick-brain-query" data-q="Antonio" style="font-size: 11px; padding: 2px 8px;">Stato & Regole Antonio</button>
-          <button type="button" class="btn btn-sm btn-secondary quick-brain-query" data-q="Allenamento kcal pull-up" style="font-size: 11px; padding: 2px 8px;">Metriche Body & Salute</button>
-        </div>
-
-        <!-- Risultato Interrogazione Ibrida -->
-        <div id="brain-query-result-box" style="flex: 1;">
-          ${lastQueryResponse ? renderHybridQueryResult(lastQueryResponse) : `
-            <div style="background: #fafafa; border: 1px dashed var(--border); border-radius: var(--radius); padding: 22px; text-align: center; color: var(--text-muted); font-size: 12px;">
-              Inserisci una domanda per attivare il motore <strong>Hybrid GraphRAG</strong>.<br>
-              Risposta sintetizzata con citazioni da <strong>Fatti Mem0</strong>, <strong>Memorie Semantiche</strong> e <strong>Knowledge Graph (1-2 Hop)</strong>.
-            </div>
-          `}
-        </div>
-      </div>
-    </div>
-
-    <!-- BARRA DI NAVIGAZIONE DELLE 3 TAB (SEGMENTED CONTROL) -->
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 18px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px;">
       <div class="segmented-tabs">
-        <button
-          type="button"
-          class="segmented-tab-btn brain-tab-btn ${activeTab === 'facts' ? 'active' : ''}"
-          data-tab="facts"
-        >
-          Fatti Attivi & Evoluzione (Mem0) <span class="badge badge-gray mono" style="padding:0 6px;font-size:10px;">${activeFacts.length}</span>
-        </button>
-        <button
-          type="button"
-          class="segmented-tab-btn brain-tab-btn ${activeTab === 'memories' ? 'active' : ''}"
-          data-tab="memories"
-        >
-          Archivio Semantico <span class="badge badge-gray mono" style="padding:0 6px;font-size:10px;">${memories.length}</span>
-        </button>
-        <button
-          type="button"
-          class="segmented-tab-btn brain-tab-btn ${activeTab === 'graph' ? 'active' : ''}"
-          data-tab="graph"
-        >
-          ${icon('cube', 13)} Mappa Knowledge Graph 3D <span class="badge badge-gray mono" style="padding:0 6px;font-size:10px;">${nodes.length} nodi • ${edges.length} archi</span>
-        </button>
+        ${tabs.map(t => `
+          <button type="button" class="segmented-tab-btn brain-tab-btn ${activeTab === t.id ? 'active' : ''}" data-tab="${t.id}">
+            ${t.label}${t.count !== null ? ` <span class="badge badge-gray mono" style="padding:0 6px;font-size:10px;">${t.count}</span>` : ''}
+          </button>`).join('')}
       </div>
-
-      <button type="button" id="brain-sync-clients-btn" class="btn btn-sm btn-secondary" title="Sincronizza tutti i clienti e to-do del Gestionale nel Second Brain">
-        Sincronizza dal Gestionale
-      </button>
     </div>
 
-    <!-- CONTENUTO DELLA TAB ATTIVA -->
     <div id="brain-tab-content">
+      ${activeTab === 'ask' ? '<div id="brain-chat-root"></div>' : ''}
+      ${activeTab === 'sources' ? '<div id="brain-sources-root"></div>' : ''}
+      ${activeTab === 'memories' ? renderIngestCard() + renderMemoriesTab(memories) : ''}
       ${activeTab === 'facts' ? renderFactsTab(activeFacts, allFacts) : ''}
-      ${activeTab === 'memories' ? renderMemoriesTab(memories) : ''}
       ${activeTab === 'graph' ? renderGraphTab(nodes, edges) : ''}
     </div>
   `;
 
+  if (activeTab === 'ask') mountBrainChat(container.querySelector('#brain-chat-root'), router);
+  if (activeTab === 'sources') mountBrainSources(container.querySelector('#brain-sources-root'), router, () => renderBrain(container, router));
+
   bindBrainEvents(container, router);
 }
 
-/**
- * Renderizza il banner di feedback immediato dopo l'ingestione
- */
+/** Scheda "Aggiungi una nota": l'IA legge il testo e propone fatti e collegamenti, che confermi prima di salvare. */
+function renderIngestCard() {
+  return `
+    <div class="card" style="margin-bottom: 18px;">
+      <div class="card-header" style="margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div id="brain-neural-orb-canvas" style="width: 44px; height: 44px; border-radius: 10px; background: #09090b; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(99,102,241,0.3);"></div>
+          <div>
+            <div class="card-title">Aggiungi una nota</div>
+            <div style="font-size: 11.5px; color: var(--text-muted);">Scrivi un appunto: ne ricavo i fatti da ricordare e te li mostro prima di salvare.</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px;">
+        ${Object.entries(BRAIN_DOMAINS).map(([key, meta]) => `
+          <button type="button" class="btn btn-sm brain-domain-pill ${selectedDomainCapture === key ? 'btn-primary' : 'btn-secondary'}" data-domain="${key}" style="font-size: 11px; padding: 4px 10px;">
+            ${meta.icon} ${meta.label}
+          </button>
+        `).join('')}
+      </div>
+
+      <form id="brain-ingest-form">
+        <div class="form-row" style="margin-bottom: 10px;">
+          <div style="flex: 2;">
+            <input type="text" id="brain-ingest-title" class="form-input" placeholder="Titolo breve (facoltativo)" />
+          </div>
+          <div style="flex: 1;">
+            <input type="text" id="brain-ingest-tags" class="form-input" placeholder="Etichette, separate da virgola" />
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom: 12px;">
+          <textarea id="brain-ingest-text" class="form-textarea" rows="3" required placeholder="Es: 'TechCorp usa Next.js e Supabase, canone 450€/mese.' oppure 'Da oggi obiettivo 2450 kcal al giorno.'"></textarea>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <button type="button" id="brain-voice-dictate-btn" class="btn btn-sm btn-secondary">
+            ${icon('mic', 13)} <span>Dettatura Vocale</span>
+          </button>
+          <button type="submit" id="brain-ingest-submit-btn" class="btn btn-ai">
+            ${icon('sparkles', 14)} <span>Memorizza</span>
+          </button>
+        </div>
+      </form>
+
+      ${lastIngestFeedback ? renderIngestFeedbackBanner(lastIngestFeedback) : ''}
+    </div>
+  `;
+}
+
 /**
  * Anteprima prima del salvataggio: l'utente vede cosa è stato capito e conferma (o toglie voci) PRIMA che si salvi.
  * Dice sempre quale motore ha lavorato: se l'IA non ha funzionato lo scrive in chiaro.
@@ -359,111 +268,6 @@ function renderIngestFeedbackBanner(fb) {
 }
 
 /**
- * Renderizza il risultato dell'interrogazione ibrida (Hybrid GraphRAG)
- */
-function renderHybridQueryResult(res) {
-  const hasResults = res.activeFacts.length > 0 || res.graphConnections.length > 0 || res.relevantMemories.length > 0;
-  return `
-    <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px;">
-      <div style="font-weight: 700; font-size: 13px; color: #1e40af; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
-        <span>💡 Risposta Sintetizzata dal Second Brain</span>
-        <span class="badge badge-blue">${res.activeFacts.length} Fatti • ${res.graphConnections.length} Archi • ${res.relevantMemories.length} Memorie</span>
-      </div>
-
-      ${!hasResults ? `
-        <div style="font-size: 12px; color: var(--text-muted);">
-          Nessuna corrispondenza trovata per <strong>"${res.query}"</strong>. Aggiungi una nota a sinistra per alimentare il Second Brain!
-        </div>
-      ` : `
-        <div style="font-size: 13px; color: var(--text-main); background: #ffffff; padding: 10px 12px; border-radius: 6px; border-left: 3px solid #7c3aed; margin-bottom: 12px; line-height: 1.55;">
-          ${res.aiAnswer ? res.aiAnswer : buildNaturalSynthesisHtml(res)}
-        </div>
-
-        <!-- Citazioni esatte dei 3 livelli -->
-        <div style="display: flex; flex-direction: column; gap: 8px; font-size: 11px;">
-          ${res.activeFacts.length > 0 ? `
-            <div>
-              <div style="font-weight: 700; color: #166534; margin-bottom: 3px;">📌 Fatti Attivi Citati (Livello 2 - Mem0):</div>
-              <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                ${res.activeFacts.map(f => `
-                  <span class="badge badge-green" style="font-size: 11px;">
-                    [${f.subject}] ${f.fact_key}: ${f.fact_value}
-                  </span>
-                `).join('')}
-              </div>
-            </div>
-          ` : ''}
-
-          ${res.graphConnections.length > 0 ? `
-            <div>
-              <div style="font-weight: 700; color: #6d28d9; margin-bottom: 3px;">🕸️ Connessioni del Grafo (Livello 3 - fino a 2 Hop):</div>
-              <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                ${res.graphConnections.map(c => `
-                  <span class="badge" style="background: #ede9fe; color: #5b21b6; font-size: 11px;">
-                    [${c.source_label}] ──(${c.relation_type})──&gt; [${c.target_label}] (Hop ${c.hop})
-                  </span>
-                `).join('')}
-              </div>
-            </div>
-          ` : ''}
-
-          ${res.relevantMemories.length > 0 ? `
-            <div>
-              <div style="font-weight: 700; color: #1e40af; margin-bottom: 3px;">📚 Memorie Semantiche Usate (Livello 1 - Vettoriale/Lessicale):</div>
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                ${res.relevantMemories.slice(0, 3).map(m => `
-                  <div style="background: #ffffff; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border);">
-                    <strong>${m.title}</strong>: ${m.content.slice(0, 120)}${m.content.length > 120 ? '...' : ''}
-                    <span class="badge badge-gray" style="font-size: 10px; margin-left: 4px;">score: ${m.similarity}</span>
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-          ` : ''}
-        </div>
-      `}
-    </div>
-  `;
-}
-
-function buildNaturalSynthesisHtml(res) {
-  const parts = [];
-  if (res.activeFacts.length > 0) {
-    const bySubj = {};
-    res.activeFacts.forEach(f => {
-      if (!bySubj[f.subject]) bySubj[f.subject] = [];
-      bySubj[f.subject].push(`<strong>${f.fact_key.replace(/_/g, ' ')}</strong>: ${f.fact_value}`);
-    });
-    const subjStrings = Object.entries(bySubj).map(
-      ([subj, list]) => `Per <strong>${subj}</strong> lo stato corrente attesta ${list.join(', ')}.`
-    );
-    parts.push(subjStrings.join(' '));
-  }
-  if (res.graphConnections.length > 0) {
-    const hop1 = res.graphConnections.filter(c => c.hop === 1);
-    const hop2 = res.graphConnections.filter(c => c.hop === 2);
-    if (hop1.length > 0) {
-      parts.push(
-        `Dal Knowledge Graph emergono ${hop1.length} relazioni dirette (${hop1
-          .slice(0, 3)
-          .map(c => `${c.source_label} → ${c.relation_type} → ${c.target_label}`)
-          .join('; ')})` +
-          (hop2.length > 0
-            ? ` e ${hop2.length} correlazioni indirette a 2-Hop (${hop2
-                .slice(0, 2)
-                .map(c => `${c.source_label} → ${c.relation_type} → ${c.target_label}`)
-                .join('; ')}).`
-            : '.')
-      );
-    }
-  }
-  if (res.relevantMemories.length > 0 && parts.length === 0) {
-    parts.push(`Dall'archivio semantico: "${res.relevantMemories[0].content}"`);
-  }
-  return parts.join('<br><br>');
-}
-
-/**
  * TAB 1: Fatti Attivi & Evoluzione Temporale (Mem0 View)
  */
 function renderFactsTab(activeFacts, allFacts) {
@@ -476,43 +280,9 @@ function renderFactsTab(activeFacts, allFacts) {
   });
 
   return `
-    <!-- Form rapido aggiunta/aggiornamento manuale Fatto Mem0 -->
-    <div class="card" style="margin-bottom: 20px; background: #f8fafc;">
-      <div style="font-weight: 700; font-size: 13px; margin-bottom: 10px; color: var(--text-main);">
-        ➕ Registra o Aggiorna Fatto Atomico (Logica Mem0 con Storicizzazione Automatica)
-      </div>
-      <form id="manual-fact-form" class="form-row" style="flex-wrap: wrap; align-items: flex-end;">
-        <div style="flex: 1.2; min-width: 150px;">
-          <label class="form-label">Soggetto *</label>
-          <input type="text" id="mf-subject" class="form-input" required placeholder="es. Antonio, TechCorp, Allenamento" />
-        </div>
-        <div style="flex: 1.2; min-width: 150px;">
-          <label class="form-label">Parametro / Chiave *</label>
-          <input type="text" id="mf-key" class="form-input" required placeholder="es. canone_mrr, target_kcal, stack_principale" />
-        </div>
-        <div style="flex: 1.5; min-width: 180px;">
-          <label class="form-label">Valore Attuale *</label>
-          <input type="text" id="mf-value" class="form-input" required placeholder="es. 450€/mese, 2400 kcal, Next.js + Supabase" />
-        </div>
-        <div style="flex: 1; min-width: 130px;">
-          <label class="form-label">Categoria</label>
-          <select id="mf-category" class="form-select">
-            <option value="status">Stato (status)</option>
-            <option value="metric">Metrica (metric)</option>
-            <option value="client_info">Info Cliente (client_info)</option>
-            <option value="preference">Preferenza (preference)</option>
-            <option value="rule">Regola (rule)</option>
-          </select>
-        </div>
-        <div>
-          <button type="submit" class="btn btn-primary">Salva Stato</button>
-        </div>
-      </form>
-    </div>
-
     ${Object.keys(groupedBySubject).length === 0 ? `
       <div class="card" style="text-align: center; padding: 40px; color: var(--text-muted);">
-        Nessun fatto atomico attivo nel Second Brain. Aggiungi una nota o usa il modulo qui sopra!
+        Nessun fatto salvato. Aggiungi una nota, importa una fonte o salva una regola dalla chat.
       </div>
     ` : `
       <div class="grid-2">
@@ -541,7 +311,7 @@ function renderFactsTab(activeFacts, allFacts) {
                           <span class="badge badge-gray" style="font-size: 10px;">${f.category}</span>
                         </div>
                         <div style="font-size: 14px; font-weight: 700; color: var(--text-main); margin-top: 6px;">
-                          ${f.fact_value}
+                          ${escapeHtml(f.fact_value)}
                         </div>
                         <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">
                           Attivo dal: ${formatDateTime(f.valid_from || f.created_at)}
@@ -549,17 +319,7 @@ function renderFactsTab(activeFacts, allFacts) {
                       </div>
 
                       <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                        <button
-                          type="button"
-                          class="btn btn-sm btn-secondary fact-update-btn"
-                          data-subject="${f.subject}"
-                          data-key="${f.fact_key}"
-                          data-val="${f.fact_value}"
-                          data-cat="${f.category}"
-                          title="Aggiorna valore (storicizza il valore attuale)"
-                        >
-                          ✏️
-                        </button>
+                        <button type="button" class="btn btn-sm btn-secondary fact-edit-btn" data-id="${f.id}" title="Modifica">✏️</button>
                         <button
                           type="button"
                           class="btn btn-sm ${history.length > 1 ? 'btn-primary' : 'btn-secondary'} fact-history-btn"
@@ -568,14 +328,8 @@ function renderFactsTab(activeFacts, allFacts) {
                         >
                           🕒 Storico (${history.length})
                         </button>
-                        <button
-                          type="button"
-                          class="btn btn-sm btn-danger fact-invalidate-btn"
-                          data-id="${f.id}"
-                          title="Invalida fatto"
-                        >
-                          ✕
-                        </button>
+                        <button type="button" class="btn btn-sm btn-secondary fact-invalidate-btn" data-id="${f.id}" title="Non vale più: lo sposto nello storico">⏸</button>
+                        <button type="button" class="btn btn-sm btn-danger fact-delete-btn" data-id="${f.id}" title="Elimina del tutto (era sbagliato)">🗑️</button>
                       </div>
                     </div>
 
@@ -643,7 +397,7 @@ function renderMemoriesTab(memories) {
             id="brain-mem-search"
             class="form-input"
             style="max-width: 260px;"
-            placeholder="Cerca nel testo delle memorie..."
+            placeholder="Cerca nelle note..."
             value="${memorySearchText}"
           />
           <select id="brain-mem-domain-filter" class="form-select" style="max-width: 200px;">
@@ -658,14 +412,14 @@ function renderMemoriesTab(memories) {
           </select>
         </div>
         <div style="font-size: 12px; color: var(--text-muted);">
-          ${filtered.length} memorie visualizzate
+          ${filtered.length} note
         </div>
       </div>
     </div>
 
     ${filtered.length === 0 ? `
       <div class="card" style="text-align: center; padding: 40px; color: var(--text-muted);">
-        Nessuna memoria semantica trovata con i filtri selezionati.
+        Nessuna nota trovata.
       </div>
     ` : `
       <div class="grid-3">
@@ -677,16 +431,17 @@ function renderMemoriesTab(memories) {
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                   <span class="badge ${domMeta.badge}">${domMeta.icon} ${domMeta.label}</span>
                   <div style="display: flex; align-items: center; gap: 6px;">
-                    <span class="badge badge-gray" style="font-size: 10px;" title="Embedding vettoriale 768 dimensioni">vec(768)</span>
+                    ${m.embedding_source === 'local' || !m.embedding ? '<span class="badge badge-yellow" style="font-size: 10px;" title="Ricerca per significato non attiva su questa nota: ricalcola da Impostazioni → Avanzate">solo parole</span>' : ''}
+                    <button type="button" class="btn btn-sm btn-secondary edit-memory-btn" data-id="${m.id}" style="padding: 2px 6px;" title="Modifica">✏️</button>
                     <button type="button" class="btn btn-sm btn-danger delete-memory-btn" data-id="${m.id}" style="padding: 2px 6px;" title="Sposta nel cestino">🗑️</button>
                   </div>
                 </div>
 
                 <div style="font-weight: 700; font-size: 15px; margin-bottom: 6px; color: var(--text-main);">
-                  ${m.title || 'Nota Second Brain'}
+                  ${escapeHtml(m.title || 'Nota')}
                 </div>
 
-                <div style="font-size: 13px; color: var(--text-muted); line-height: 1.55; margin-bottom: 12px; white-space: pre-wrap;">${m.content}</div>
+                <div style="font-size: 13px; color: var(--text-muted); line-height: 1.55; margin-bottom: 12px; white-space: pre-wrap;">${escapeHtml(m.content)}</div>
               </div>
 
               <div>
@@ -755,50 +510,6 @@ function renderGraphTab(nodes, edges) {
       <div id="brain-graph-3d-canvas" style="width: 100%; height: 360px; position: relative;"></div>
     </div>
 
-    <!-- Form rapido per aggiungere manualmente una Relazione nel Grafo -->
-    <div class="card" style="margin-bottom: 20px; background: #fafafa;">
-      <div style="font-weight: 600; font-size: 13px; margin-bottom: 10px; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
-        ${icon('plus', 14)} <span>Aggiungi Connessione Manuale al Knowledge Graph</span>
-      </div>
-      <form id="manual-edge-form" class="form-row" style="flex-wrap: wrap; align-items: flex-end;">
-        <div style="flex: 1.2; min-width: 140px;">
-          <label class="form-label">Nodo Sorgente *</label>
-          <input type="text" id="me-source" class="form-input" required placeholder="es. TechCorp o Pull-up" />
-        </div>
-        <div style="flex: 0.9; min-width: 120px;">
-          <label class="form-label">Tipo Sorgente</label>
-          <select id="me-source-type" class="form-select">
-            ${Object.entries(NODE_TYPE_META).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join('')}
-          </select>
-        </div>
-        <div style="flex: 1.1; min-width: 140px;">
-          <label class="form-label">Tipo Relazione *</label>
-          <select id="me-relation" class="form-select">
-            <option value="USA_TECNOLOGIA">USA_TECNOLOGIA</option>
-            <option value="LAVORA_CON">LAVORA_CON</option>
-            <option value="CAUSA">CAUSA</option>
-            <option value="MIGLIORA">MIGLIORA</option>
-            <option value="RIDUCE">RIDUCE</option>
-            <option value="DIPENDE_DA">DIPENDE_DA</option>
-            <option value="CORRELATO_A">CORRELATO_A</option>
-          </select>
-        </div>
-        <div style="flex: 1.2; min-width: 140px;">
-          <label class="form-label">Nodo Destinazione *</label>
-          <input type="text" id="me-target" class="form-input" required placeholder="es. Supabase o Forza Dorso" />
-        </div>
-        <div style="flex: 0.9; min-width: 120px;">
-          <label class="form-label">Tipo Destinazione</label>
-          <select id="me-target-type" class="form-select">
-            ${Object.entries(NODE_TYPE_META).map(([k, v]) => `<option value="${k}" ${k === 'technology' ? 'selected' : ''}>${v.icon} ${v.label}</option>`).join('')}
-          </select>
-        </div>
-        <div>
-          <button type="submit" class="btn btn-primary">+ Collega Nodi</button>
-        </div>
-      </form>
-    </div>
-
     <div class="grid-2">
       <!-- Colonna Sinistra: Mappa Nodi Colorati per Tipo -->
       <div class="card" style="margin-bottom: 0;">
@@ -818,7 +529,7 @@ function renderGraphTab(nodes, edges) {
 
         ${filteredNodes.length === 0 ? `
           <div style="text-align: center; padding: 30px; color: var(--text-muted);">
-            Nessun nodo presente nel grafo.
+            Nessun nodo nella mappa. Per aggiungerne a mano: Impostazioni → Avanzate.
           </div>
         ` : `
           <div style="display: flex; gap: 8px; flex-wrap: wrap;">
@@ -871,8 +582,12 @@ function renderGraphTab(nodes, edges) {
               </span>
               <div class="card-title" style="font-size: 18px; margin-top: 4px;">${selectedNode.label}</div>
             </div>
-            <div style="font-size: 11px; color: var(--text-muted);">
-              ${directEdges.length} dirette • ${indirectEdges.length} indirette
+            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+              <div class="row-actions">
+                <button type="button" class="btn btn-sm btn-secondary graph-node-edit-btn" data-id="${selectedNode.id}" title="Rinomina o cambia tipo">✏️ Modifica</button>
+                <button type="button" class="btn btn-sm btn-danger graph-node-delete-btn" data-id="${selectedNode.id}" title="Elimina il nodo e i suoi collegamenti">🗑️ Elimina</button>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted);">${directEdges.length} dirette • ${indirectEdges.length} indirette</div>
             </div>
           </div>
 
@@ -892,7 +607,11 @@ function renderGraphTab(nodes, edges) {
                       <span style="color: var(--accent); font-family: monospace; font-weight: 700; margin: 0 6px;">──(${e.relation_type})──&gt;</span>
                       <strong>[${e.target_label}]</strong>
                     </div>
-                    <span class="badge badge-gray" style="font-size: 10px;">peso: ${e.weight}</span>
+                    <div class="row-actions">
+                      <span class="badge badge-gray" style="font-size: 10px;">peso: ${e.weight}</span>
+                      <button type="button" class="btn btn-sm btn-secondary graph-edge-edit-btn" data-id="${e.id}" title="Modifica collegamento">✏️</button>
+                      <button type="button" class="btn btn-sm btn-danger graph-edge-delete-btn" data-id="${e.id}" title="Elimina collegamento">🗑️</button>
+                    </div>
                   </div>
                 `).join('')}
               </div>
@@ -915,7 +634,11 @@ function renderGraphTab(nodes, edges) {
                       <span style="color: #7c3aed; font-family: monospace; font-weight: 700; margin: 0 6px;">──(${e.relation_type})──&gt;</span>
                       <strong>[${e.target_label}]</strong>
                     </div>
-                    <span class="badge" style="background: #ede9fe; color: #5b21b6; font-size: 10px;">2° Hop</span>
+                    <div class="row-actions">
+                      <span class="badge" style="background: #ede9fe; color: #5b21b6; font-size: 10px;">2° Hop</span>
+                      <button type="button" class="btn btn-sm btn-secondary graph-edge-edit-btn" data-id="${e.id}" title="Modifica collegamento">✏️</button>
+                      <button type="button" class="btn btn-sm btn-danger graph-edge-delete-btn" data-id="${e.id}" title="Elimina collegamento">🗑️</button>
+                    </div>
                   </div>
                 `).join('')}
               </div>
@@ -942,7 +665,6 @@ function bindBrainEvents(container, router) {
 
   // Reattività fisica del Nucleo 3D quando l'utente digita
   const ingestTxt = container.querySelector('#brain-ingest-text');
-  const queryTxt = container.querySelector('#brain-query-input');
   let orbIdleTimer = null;
   const pulseOrb = () => {
     activeOrb3DInstance?.setEnergy('active');
@@ -950,7 +672,6 @@ function bindBrainEvents(container, router) {
     orbIdleTimer = setTimeout(() => activeOrb3DInstance?.setEnergy('idle'), 1200);
   };
   ingestTxt?.addEventListener('input', pulseOrb);
-  queryTxt?.addEventListener('input', pulseOrb);
 
   // Monta il Knowledge Graph 3D Force-Directed quando il Tab 3 è attivo
   if (activeGraph3DInstance?.destroy) {
@@ -1057,26 +778,6 @@ function bindBrainEvents(container, router) {
     renderBrain(container, router);
   });
 
-  // Interrogazione Ibrida Second Brain
-  const queryForm = container.querySelector('#brain-query-form');
-  if (queryForm) {
-    queryForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const q = container.querySelector('#brain-query-input')?.value.trim() || '';
-      lastQueryResponse = await querySecondBrain(q);
-      renderBrain(container, router);
-    });
-  }
-
-  // Quick query chips
-  container.querySelectorAll('.quick-brain-query').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const q = btn.getAttribute('data-q');
-      lastQueryResponse = await querySecondBrain(q);
-      renderBrain(container, router);
-    });
-  });
-
   // Cambio Tab
   container.querySelectorAll('.brain-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1085,41 +786,33 @@ function bindBrainEvents(container, router) {
     });
   });
 
-  // Sincronizza dal Gestionale
-  container.querySelector('#brain-sync-clients-btn')?.addEventListener('click', () => {
-    const clients = store.getAll('clients');
-    clients.forEach(c => syncClientToBrain(c));
-    renderBrain(container, router);
-  });
-
-  // --- Eventi Tab 1: Fatti Mem0 ---
-  const manualFactForm = container.querySelector('#manual-fact-form');
-  if (manualFactForm) {
-    manualFactForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const subject = container.querySelector('#mf-subject').value.trim();
-      const fact_key = container.querySelector('#mf-key').value.trim();
-      const fact_value = container.querySelector('#mf-value').value.trim();
-      const category = container.querySelector('#mf-category').value;
-
-      upsertFact({ subject, fact_key, fact_value, category });
-      renderBrain(container, router);
-    });
-  }
-
-  container.querySelectorAll('.fact-update-btn').forEach(btn => {
+  // --- Fatti: modifica, storico, disattiva, elimina ---
+  container.querySelectorAll('.fact-edit-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const subject = btn.getAttribute('data-subject');
-      const fact_key = btn.getAttribute('data-key');
-      const currentVal = btn.getAttribute('data-val');
-      const category = btn.getAttribute('data-cat');
-
-      const newVal = prompt(`Aggiorna valore per [${subject}] "${fact_key}"\n(Il valore precedente "${currentVal}" verrà conservato nello storico):`, currentVal);
-      if (newVal !== null && newVal.trim() !== '') {
-        upsertFact({ subject, fact_key, fact_value: newVal.trim(), category });
-        expandedHistoryKey = `${subject.toLowerCase()}::${fact_key.toLowerCase()}`;
-        renderBrain(container, router);
-      }
+      const f = store.getById('brain_facts', btn.getAttribute('data-id'));
+      if (!f) return;
+      openFormModal({
+        title: 'Modifica fatto',
+        fields: [
+          { id: 'subject', label: 'Di chi o di cosa parla', value: f.subject, required: true },
+          { id: 'fact_key', label: 'Che cosa (chiave)', value: f.fact_key, required: true, hint: 'Una parola o due, es. target_kcal, tariffa_oraria' },
+          { id: 'fact_value', label: 'Valore', value: f.fact_value, required: true },
+          { id: 'category', label: 'Tipo', type: 'select', value: f.category, options: FACT_CATEGORIES },
+          { id: 'keep_history', label: 'È cambiato davvero: conserva il valore di prima nello storico', type: 'checkbox', value: true, hint: 'Togli la spunta se stai solo correggendo un errore di scrittura.' },
+        ],
+        submitLabel: 'Salva',
+        onSubmit: (v) => {
+          const valueChanged = v.fact_value.trim() !== String(f.fact_value).trim();
+          const sameIdentity = v.subject.trim().toLowerCase() === String(f.subject).toLowerCase() && v.fact_key.trim().toLowerCase() === String(f.fact_key).toLowerCase();
+          if (valueChanged && v.keep_history && sameIdentity) {
+            upsertFact({ subject: v.subject, fact_key: v.fact_key, fact_value: v.fact_value, category: v.category });
+            expandedHistoryKey = `${v.subject.trim().toLowerCase()}::${f.fact_key.toLowerCase()}`;
+          } else {
+            updateFact(f.id, v);
+          }
+          renderBrain(container, router);
+        },
+      });
     });
   });
 
@@ -1134,10 +827,19 @@ function bindBrainEvents(container, router) {
   container.querySelectorAll('.fact-invalidate-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-id');
-      if (confirm('Vuoi invalidare questo fatto attivo? Rimarrà consultabile nello storico.')) {
+      if (confirm('Questo fatto non vale più? Resta consultabile nello storico, ma non viene più usato nelle risposte.')) {
         invalidateFact(id);
         renderBrain(container, router);
       }
+    });
+  });
+
+  container.querySelectorAll('.fact-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!confirm('Eliminare del tutto questo fatto? Se ne aveva sostituito uno precedente, quello torna attivo.')) return;
+      const res = deleteFact(btn.getAttribute('data-id'));
+      if (res?.restored) showToast(`Eliminato. È tornato attivo il valore di prima: ${res.restored.fact_value}`, 'info', 5000);
+      renderBrain(container, router);
     });
   });
 
@@ -1153,6 +855,26 @@ function bindBrainEvents(container, router) {
   container.querySelector('#brain-mem-tag-filter')?.addEventListener('change', (e) => {
     memoryTagFilter = e.target.value;
     renderBrain(container, router);
+  });
+  container.querySelectorAll('.edit-memory-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const m = store.getById('brain_memories', btn.getAttribute('data-id'));
+      if (!m) return;
+      openFormModal({
+        title: 'Modifica nota',
+        large: true,
+        fields: [
+          { id: 'title', label: 'Titolo', value: m.title || '' },
+          { id: 'content', label: 'Testo', type: 'textarea', rows: 8, value: m.content || '', required: true },
+          { id: 'domain', label: 'Ambito', type: 'select', value: m.domain, options: DOMAIN_OPTIONS },
+          { id: 'tags', label: 'Etichette (separate da virgola)', value: (m.tags || []).join(', ') },
+        ],
+        onSubmit: async (v) => {
+          await updateMemory(m.id, v); // se il testo cambia si ricalcola la ricerca per significato
+          renderBrain(container, router);
+        },
+      });
+    });
   });
   container.querySelectorAll('.delete-memory-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1176,29 +898,52 @@ function bindBrainEvents(container, router) {
     });
   });
 
-  const manualEdgeForm = container.querySelector('#manual-edge-form');
-  if (manualEdgeForm) {
-    manualEdgeForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const source = container.querySelector('#me-source').value.trim();
-      const source_type = container.querySelector('#me-source-type').value;
-      const relation_type = container.querySelector('#me-relation').value;
-      const target = container.querySelector('#me-target').value.trim();
-      const target_type = container.querySelector('#me-target-type').value;
-
-      const res = upsertGraphRelationship({
-        source,
-        source_type,
-        target,
-        target_type,
-        relation_type,
-        evidence: 'Aggiunto manualmente nella mappa Knowledge Graph',
+  container.querySelector('.graph-node-edit-btn')?.addEventListener('click', (e) => {
+    const n = store.getById('brain_nodes', e.currentTarget.getAttribute('data-id'));
+    if (!n) return;
+    openFormModal({
+      title: 'Modifica nodo',
+      fields: [
+        { id: 'label', label: 'Nome', value: n.label, required: true },
+        { id: 'node_type', label: 'Tipo', type: 'select', value: n.node_type, options: NODE_TYPE_OPTIONS },
+      ],
+      onSubmit: (v) => {
+        updateNode(n.id, v);
+        renderBrain(container, router);
+      },
+    });
+  });
+  container.querySelector('.graph-node-delete-btn')?.addEventListener('click', (e) => {
+    const id = e.currentTarget.getAttribute('data-id');
+    const n = store.getById('brain_nodes', id);
+    if (!n || !confirm(`Eliminare "${n.label}" e tutti i suoi collegamenti?`)) return;
+    deleteNode(id);
+    selectedGraphNodeId = null;
+    renderBrain(container, router);
+  });
+  container.querySelectorAll('.graph-edge-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const edge = store.getById('brain_edges', btn.getAttribute('data-id'));
+      if (!edge) return;
+      openFormModal({
+        title: 'Modifica collegamento',
+        fields: [
+          { id: 'relation_type', label: 'Tipo di collegamento', value: edge.relation_type, required: true, hint: 'Es. USA_TECNOLOGIA, LAVORA_CON, CAUSA, MIGLIORA' },
+          { id: 'evidence', label: 'Da dove viene (nota)', type: 'textarea', rows: 2, value: edge.evidence || '' },
+          { id: 'weight', label: 'Peso', type: 'number', value: edge.weight ?? 1 },
+        ],
+        onSubmit: (v) => {
+          updateEdge(edge.id, v);
+          renderBrain(container, router);
+        },
       });
-      if (res?.sourceNode) {
-        selectedGraphNodeId = res.sourceNode.id;
-      }
+    });
+  });
+  container.querySelectorAll('.graph-edge-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!confirm('Eliminare questo collegamento?')) return;
+      deleteEdge(btn.getAttribute('data-id'));
       renderBrain(container, router);
     });
-  }
+  });
 }
-

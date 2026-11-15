@@ -186,6 +186,31 @@ async function openaiRequest(fetchFn, path, apiKey, init = {}, timeoutMs = 20000
   }
 }
 
+/** Modello per i vettori di ricerca. 768 numeri per vettore: la stessa misura delle colonne del database. */
+export const OPENAI_EMBED_MODEL = 'text-embedding-3-small';
+export const EMBED_DIMS = 768;
+
+/**
+ * Vettori di ricerca con OpenAI, anche molti testi in una sola richiesta (import di documenti).
+ * @returns {Promise<{vectors:number[][], model:string, tokens:number|null}>}
+ */
+export async function openaiEmbed({ apiKey, fetchFn = fetch, env = {}, texts, dims = EMBED_DIMS, timeoutMs = 30000 }) {
+  if (!apiKey) throw new GeminiError('no_api_key', 'Chiave API di OpenAI non configurata.');
+  const input = (Array.isArray(texts) ? texts : [texts]).map(t => String(t || '').slice(0, 16000) || ' ');
+  if (input.length === 0) return { vectors: [], model: env.OPENAI_EMBED_MODEL || OPENAI_EMBED_MODEL, tokens: 0 };
+  const model = env.OPENAI_EMBED_MODEL || OPENAI_EMBED_MODEL;
+  const data = await openaiRequest(fetchFn, '/embeddings', apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, input, dimensions: dims }),
+  }, timeoutMs);
+  const vectors = [...(data?.data || [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map(d => d.embedding);
+  if (vectors.length !== input.length || vectors.some(v => !Array.isArray(v) || v.length !== dims)) {
+    throw new GeminiError('bad_response', `OpenAI ha restituito vettori di misura inattesa (attesi ${input.length} da ${dims} numeri).`);
+  }
+  return { vectors, model, tokens: data?.usage?.total_tokens ?? null };
+}
+
 const OPENAI_NOT_CHAT = /audio|realtime|transcribe|tts|image|search|codex|instruct|embedding|moderation|whisper|dall|sora|davinci|babbage|computer|deep-research|omni-moderation/i;
 const openaiVersion = id => {
   const m = String(id).match(/gpt-(\d+(?:\.\d+)?)/);
@@ -358,6 +383,7 @@ export async function generateStructured({
   geminiKey = '',
   anthropicKey = '',
   budgetMs = null,
+  maxTokens = 2048,
 }) {
   const started = Date.now();
   const order = [];
@@ -377,13 +403,13 @@ export async function generateStructured({
     try {
       let res;
       if (provider === 'openai') {
-        res = await openaiGenerate({ apiKey: openaiKey, fetchFn, env, system, parts, json, timeoutMs: isLast ? 25000 : (budgetMs ?? openaiBudgetMs) });
+        res = await openaiGenerate({ apiKey: openaiKey, fetchFn, env, system, parts, json, maxTokens, timeoutMs: isLast ? Math.max(25000, budgetMs || 0) : (budgetMs ?? openaiBudgetMs) });
       } else if (provider === 'gemini') {
         // Con altri fornitori pronti si fa un solo tentativo breve; se è l'ultimo si insiste come al solito.
         res = await geminiGenerate({ apiKey: geminiKey, fetchFn, env, system, parts, temperature, json, timeoutMs: isLast ? null : (budgetMs ?? geminiBudgetMs), fast: true });
       } else {
         if (hasAudio(parts)) throw new GeminiError('media_unsupported', 'Claude non accetta note vocali.');
-        res = await anthropicGenerate({ apiKey: anthropicKey, fetchFn, env, system, parts, temperature, json });
+        res = await anthropicGenerate({ apiKey: anthropicKey, fetchFn, env, system, parts, temperature, json, maxTokens });
       }
       return { ...res, provider, ms: Date.now() - started, fallbackReason: failures.length ? failures.join(' | ') : null };
     } catch (err) {

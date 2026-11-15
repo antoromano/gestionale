@@ -9,6 +9,13 @@ const COPIES = [
   ['src/services/gemini-core.js', 'supabase/functions/gemini-assistant/gemini-core.js'],
   ['src/services/ai-providers.js', 'supabase/functions/telegram-webhook/ai-providers.js'],
   ['src/services/ai-providers.js', 'supabase/functions/gemini-assistant/ai-providers.js'],
+  // Chat personale ("Chiedi a te stesso"): stesso motore per l'app e per il comando /ask di Telegram
+  ['src/services/rag-core.js', 'supabase/functions/personal-rag-chat/rag-core.js'],
+  ['src/services/rag-server.js', 'supabase/functions/personal-rag-chat/rag-server.js'],
+  ['src/services/ai-providers.js', 'supabase/functions/personal-rag-chat/ai-providers.js'],
+  ['src/services/gemini-core.js', 'supabase/functions/personal-rag-chat/gemini-core.js'],
+  ['src/services/rag-core.js', 'supabase/functions/telegram-webhook/rag-core.js'],
+  ['src/services/rag-server.js', 'supabase/functions/telegram-webhook/rag-server.js'],
 ];
 
 export const HEADER = (from) => `// COPIA GENERATA da ${from} con scripts/sync-edge-shared.mjs: NON modificare qui.\n`;

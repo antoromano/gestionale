@@ -2,7 +2,7 @@
 // GENERATO da scripts/gen-cloud-schema.mjs a partire dallo schema reale di Supabase. Non modificare a mano.
 // t = tipo Postgres, n = nullable, d = ha un valore di default, g = colonna generata/non scrivibile.
 
-export const SYNCED_TABLES = ["settings","clients","services_catalog","quotes","quote_items","quote_item_images","quote_extra_services","payments","todos","appointments","finance_transactions","trading_items","brain_memories","brain_nodes","brain_facts","brain_edges","body_exercise_columns","body_daily_logs","body_workout_entries","ai_note_queue"];
+export const SYNCED_TABLES = ["settings","clients","services_catalog","quotes","quote_items","quote_item_images","quote_extra_services","payments","todos","appointments","finance_transactions","trading_items","brain_documents","brain_memories","brain_nodes","brain_facts","brain_edges","body_exercise_columns","body_daily_logs","body_workout_entries","ai_note_queue","brain_assistant_profiles"];
 
 export const CLOUD_SCHEMA = {
  "settings": {
@@ -1457,6 +1457,92 @@ export const CLOUD_SCHEMA = {
    "g": false
   }
  },
+ "brain_documents": {
+  "id": {
+   "t": "uuid",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "user_id": {
+   "t": "uuid",
+   "n": true,
+   "d": true,
+   "g": false
+  },
+  "title": {
+   "t": "text",
+   "n": false,
+   "d": false,
+   "g": false
+  },
+  "source_provider": {
+   "t": "text",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "external_conversation_id": {
+   "t": "text",
+   "n": true,
+   "d": false,
+   "g": false
+  },
+  "domain": {
+   "t": "text",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "original_date": {
+   "t": "timestamptz",
+   "n": true,
+   "d": false,
+   "g": false
+  },
+  "raw_content": {
+   "t": "text",
+   "n": true,
+   "d": false,
+   "g": false
+  },
+  "chunk_count": {
+   "t": "int4",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "facts_extracted_count": {
+   "t": "int4",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "is_deleted": {
+   "t": "bool",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "extra": {
+   "t": "jsonb",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "created_at": {
+   "t": "timestamptz",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "updated_at": {
+   "t": "timestamptz",
+   "n": false,
+   "d": true,
+   "g": false
+  }
+ },
  "brain_memories": {
   "id": {
    "t": "uuid",
@@ -1541,6 +1627,36 @@ export const CLOUD_SCHEMA = {
    "n": false,
    "d": true,
    "g": false
+  },
+  "document_id": {
+   "t": "uuid",
+   "n": true,
+   "d": false,
+   "g": false
+  },
+  "chunk_index": {
+   "t": "int4",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "source_date": {
+   "t": "timestamptz",
+   "n": true,
+   "d": false,
+   "g": false
+  },
+  "embedding_source": {
+   "t": "text",
+   "n": true,
+   "d": false,
+   "g": false
+  },
+  "fts": {
+   "t": "tsvector",
+   "n": true,
+   "d": false,
+   "g": true
   }
  },
  "brain_nodes": {
@@ -2058,6 +2174,56 @@ export const CLOUD_SCHEMA = {
    "t": "timestamptz",
    "n": true,
    "d": false,
+   "g": false
+  }
+ },
+ "brain_assistant_profiles": {
+  "id": {
+   "t": "uuid",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "user_id": {
+   "t": "uuid",
+   "n": true,
+   "d": true,
+   "g": false
+  },
+  "global_instructions": {
+   "t": "text",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "domain_rules": {
+   "t": "jsonb",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "live_data_permissions": {
+   "t": "jsonb",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "extra": {
+   "t": "jsonb",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "created_at": {
+   "t": "timestamptz",
+   "n": false,
+   "d": true,
+   "g": false
+  },
+  "updated_at": {
+   "t": "timestamptz",
+   "n": false,
+   "d": true,
    "g": false
   }
  }

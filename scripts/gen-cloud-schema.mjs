@@ -8,8 +8,9 @@ const SYNCED = [
   // ordine = dipendenze: i padri prima dei figli (l'eliminazione usa l'ordine inverso)
   'settings', 'clients', 'services_catalog', 'quotes', 'quote_items', 'quote_item_images', 'quote_extra_services',
   'payments', 'todos', 'appointments', 'finance_transactions', 'trading_items',
-  'brain_memories', 'brain_nodes', 'brain_facts', 'brain_edges',
+  'brain_documents', 'brain_memories', 'brain_nodes', 'brain_facts', 'brain_edges',
   'body_exercise_columns', 'body_daily_logs', 'body_workout_entries', 'ai_note_queue',
+  'brain_assistant_profiles',
 ];
 
 const raw = JSON.parse(readFileSync(process.argv[2], 'utf8'));

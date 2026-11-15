@@ -7,13 +7,13 @@
 //
 // Azioni (POST JSON):
 //   { action: "generate", system?, parts: [{text}|{inline_data}], temperature?, json? }  → { ok, data, model, provider, ms }
-//   { action: "embed", text }                                                            → { ok, values, model }
+//   { action: "embed", text | texts: [...] }                                             → { ok, values, vectors, model, source }
 //   { action: "diagnose" }                                                               → { ok, openai: {...}, gemini: {...}, anthropic: {...} }
 // Errore: { ok: false, error: { code, message } } con HTTP 200 (così il client lo legge sempre e lo mostra).
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { embed, diagnose } from "./gemini-core.js";
-import { generateStructured, resolveAnthropicModel, anthropicGenerate, resolveOpenAIModel, openaiGenerate } from "./ai-providers.js";
+import { generateStructured, resolveAnthropicModel, anthropicGenerate, resolveOpenAIModel, openaiGenerate, openaiEmbed } from "./ai-providers.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -46,6 +46,7 @@ serve(async (req) => {
     ANTHROPIC_MODEL: Deno.env.get("ANTHROPIC_MODEL") || "",
     OPENAI_MODEL: Deno.env.get("OPENAI_MODEL") || "",
     OPENAI_TRANSCRIBE_MODEL: Deno.env.get("OPENAI_TRANSCRIBE_MODEL") || "",
+    OPENAI_EMBED_MODEL: Deno.env.get("OPENAI_EMBED_MODEL") || "",
   };
 
   try {
@@ -53,7 +54,9 @@ serve(async (req) => {
       const parts = Array.isArray(body.parts) ? body.parts : [{ text: String(body.prompt || "") }];
       const res = await generateStructured({
         openaiKey, geminiKey, anthropicKey, env, fetchFn: fetch,
-        system: String(body.system || "").slice(0, 60000), parts,
+        system: String(body.system || "").slice(0, 120000), parts,
+        maxTokens: Math.min(Math.max(Number(body.maxTokens) || 2048, 256), 8000),
+        budgetMs: Number(body.budgetMs) > 0 ? Math.min(Number(body.budgetMs), 60000) : null,
         temperature: typeof body.temperature === "number" ? body.temperature : 0.1,
         json: body.json !== false,
       });
@@ -61,9 +64,22 @@ serve(async (req) => {
     }
 
     if (body.action === "embed") {
-      if (!geminiKey) return json({ ok: false, error: { code: "no_api_key", message: "Gli embedding richiedono GEMINI_API_KEY." } });
-      const { values, model } = await embed({ apiKey: geminiKey, env, fetchFn: fetch, text: String(body.text || "").slice(0, 20000) });
-      return json({ ok: true, values, model });
+      // Vettori di ricerca: OpenAI (anche molti testi insieme). Gemini resta solo se la chiave OpenAI non c'è proprio:
+      // vettori di fornitori diversi non sono confrontabili, quindi `source` dice sempre chi li ha calcolati.
+      const texts: string[] = Array.isArray(body.texts) ? body.texts.slice(0, 96).map((t: unknown) => String(t || "")) : [String(body.text || "")];
+      if (openaiKey) {
+        const { vectors, model, tokens } = await openaiEmbed({ apiKey: openaiKey, env, fetchFn: fetch, texts });
+        return json({ ok: true, values: vectors[0], vectors, model, source: "openai", tokens });
+      }
+      if (!geminiKey) return json({ ok: false, error: { code: "no_api_key", message: "I vettori di ricerca richiedono OPENAI_API_KEY (o, in mancanza, GEMINI_API_KEY)." } });
+      const vectors: number[][] = [];
+      let model = "";
+      for (const t of texts) {
+        const r = await embed({ apiKey: geminiKey, env, fetchFn: fetch, text: t.slice(0, 20000) });
+        vectors.push(r.values);
+        model = r.model;
+      }
+      return json({ ok: true, values: vectors[0], vectors, model, source: "gemini", tokens: null });
     }
 
     if (body.action === "diagnose") {

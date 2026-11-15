@@ -12,6 +12,8 @@
 
 import { parseWorkoutNotation, DEFAULT_BODY_COLUMNS } from './body-parser.js';
 import { generateStructured } from './ai-providers.js';
+import { askPersonalRagServer } from './rag-server.js';
+import { formatAnswerText } from './rag-core.js';
 
 const ok = (body = { ok: true }) => ({ status: 200, body });
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -35,6 +37,7 @@ function telegram(deps) {
     send: (chat_id, text, reply_markup) => call('sendMessage', { chat_id, text, parse_mode: 'HTML', ...(reply_markup ? { reply_markup } : {}) }),
     edit: (chat_id, message_id, text) => call('editMessageText', { chat_id, message_id, text, parse_mode: 'HTML' }),
     answer: (callback_query_id, text) => call('answerCallbackQuery', { callback_query_id, text }),
+    typing: (chat_id) => call('sendChatAction', { chat_id, action: 'typing' }),
     async download(file_id) {
       if (!token) throw new Error('TELEGRAM_BOT_TOKEN mancante');
       const info = await (await deps.fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${file_id}`)).json();
@@ -319,7 +322,7 @@ async function createPendingBrain(deps, tg, owner, chatId, note, rawText, notice
 // ---------------------------------------------------------------------------
 
 export function parseCommand(text = '') {
-  const m = String(text).trim().match(/^\/(start|help|queue|digest)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  const m = String(text).trim().match(/^\/(start|help|queue|digest|ask)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
   return m ? { name: m[1].toLowerCase(), args: (m[2] || '').trim() } : null;
 }
 
@@ -328,12 +331,44 @@ const HELP = [
   '• Scrivi o manda un vocale: <i>"Pull Up 20(10,10,10), peso 75 kg"</i>, <i>"ho speso 45€ di benzina"</i>, <i>"richiamare Marco domani"</i>.',
   '• <code>/queue testo</code> accoda una nota senza consumare IA.',
   '• <code>/digest</code> elabora tutte le note in coda con UNA sola chiamata.',
+  '• <code>/ask domanda</code> rispondo usando il tuo archivio (documenti, fatti, dati di oggi) e ti dico le fonti.',
   'Ogni salvataggio ha un pulsante ↩️ Annulla.',
 ].join('\n');
+
+/** Telegram accetta al massimo 4096 caratteri per messaggio: una risposta lunga si divide a fine riga. */
+export function splitForTelegram(text, max = 3900) {
+  const out = [];
+  let rest = String(text);
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf('\n', max);
+    if (cut < max * 0.5) cut = rest.lastIndexOf(' ', max);
+    if (cut < max * 0.5) cut = max;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\s+/, '');
+  }
+  if (rest) out.push(rest);
+  return out;
+}
 
 async function handleCommand(deps, tg, owner, chatId, cmd, date) {
   const { supabase } = deps;
   if (cmd.name === 'start' || cmd.name === 'help') return tg.send(chatId, HELP);
+
+  // /ask: stessa chat personale dell'app (stesso motore, stesse istruzioni, stessi interruttori privacy)
+  if (cmd.name === 'ask') {
+    if (!cmd.args) {
+      return tg.send(chatId, '❓ Usa <code>/ask domanda</code>.\nEsempi: <i>/ask Cosa posso cucinare stasera per chiudere i macro di oggi?</i> · <i>/ask Cosa avevamo deciso per TechCorp?</i>');
+    }
+    await tg.typing(chatId);
+    try {
+      const result = await askPersonalRagServer({ client: supabase, userId: owner, env: deps.env, fetchFn: deps.fetch, question: cmd.args, today: date });
+      for (const piece of splitForTelegram(esc(formatAnswerText(result)))) await tg.send(chatId, piece);
+    } catch (err) {
+      const why = err.code === 'not_configured' || err.code === 'no_api_key' ? 'Nessuna chiave IA è configurata sul server.' : err.message;
+      await tg.send(chatId, `❌ Non sono riuscito a rispondere: ${esc(why)}\nRiprova tra poco.`);
+    }
+    return undefined;
+  }
 
   if (cmd.name === 'queue') {
     if (!cmd.args) return tg.send(chatId, '📝 Usa <code>/queue testo</code> per accodare una nota. Poi <code>/digest</code> le elabora tutte insieme.');
@@ -394,7 +429,8 @@ async function handleMessage(deps, tg, msg) {
   const date = localDate(deps, msg.date, text);
   const cmd = parseCommand(text);
   if (cmd) {
-    await handleCommand(deps, tg, owner, chatId, cmd, date);
+    // per una domanda "oggi" è sempre oggi (la parola "ieri" dentro la domanda non deve spostare la data)
+    await handleCommand(deps, tg, owner, chatId, cmd, cmd.name === 'ask' ? localDate(deps, msg.date, '') : date);
     return ok({ ok: true, intent: cmd.name });
   }
 

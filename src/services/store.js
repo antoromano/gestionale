@@ -56,6 +56,8 @@ export const defaultSettings = {
   notion_database_id: '',
   notion_sync_last_at: null,
   gemini_api_key: '',
+  openai_api_key: '',      // chiave personale facoltativa: resta solo su questo dispositivo (di norma la chiave sta sul server)
+  openai_chat_model: '',   // vuoto = scelta automatica del modello "mini" più recente
   dev_hourly_rate: 50,
   business_type: 'software_dev',
   github_token: '',
@@ -112,6 +114,8 @@ function createEmptyData() {
     body_workout_entries: [],
     telegram_pending_actions: [],
     telegram_bot_subscribers: [],
+    brain_documents: [],
+    brain_assistant_profiles: [],
   };
 }
 

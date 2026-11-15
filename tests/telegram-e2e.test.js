@@ -323,6 +323,14 @@ describe('19. Gemini: nessun nome di modello scritto nel codice, errori sempre e
       ['src/utils/body-parser.js', 'supabase/functions/telegram-webhook/body-parser.js'],
       ['src/services/gemini-core.js', 'supabase/functions/telegram-webhook/gemini-core.js'],
       ['src/services/gemini-core.js', 'supabase/functions/gemini-assistant/gemini-core.js'],
+      ['src/services/ai-providers.js', 'supabase/functions/telegram-webhook/ai-providers.js'],
+      ['src/services/ai-providers.js', 'supabase/functions/gemini-assistant/ai-providers.js'],
+      ['src/services/rag-core.js', 'supabase/functions/personal-rag-chat/rag-core.js'],
+      ['src/services/rag-server.js', 'supabase/functions/personal-rag-chat/rag-server.js'],
+      ['src/services/ai-providers.js', 'supabase/functions/personal-rag-chat/ai-providers.js'],
+      ['src/services/gemini-core.js', 'supabase/functions/personal-rag-chat/gemini-core.js'],
+      ['src/services/rag-core.js', 'supabase/functions/telegram-webhook/rag-core.js'],
+      ['src/services/rag-server.js', 'supabase/functions/telegram-webhook/rag-server.js'],
     ];
     for (const [src, copy] of pairs) {
       expect(strip(readFileSync(copy, 'utf8')), `${copy} è fuori sincronia: esegui node scripts/sync-edge-shared.mjs`).toBe(readFileSync(src, 'utf8'));

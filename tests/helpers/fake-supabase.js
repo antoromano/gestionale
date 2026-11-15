@@ -4,6 +4,7 @@
 // Serve a provare il percorso COMPLETO Telegram → cloud → app, cosa che i test originali non facevano.
 
 import { CLOUD_SCHEMA } from '../../src/services/cloud-schema.js';
+import { hybridScore } from '../../src/services/rag-core.js';
 
 const CHECKS = {
   clients: { type: ['person', 'company'] },
@@ -111,7 +112,8 @@ export function createFakeCloud() {
           if (q.range) out = out.slice(q.range[0], q.range[1] + 1);
           if (q.limit !== null) out = out.slice(0, q.limit);
           if (q.head) return { data: null, error: null, count: total };
-          const data = out.map(r => structuredClone(r));
+          let data = out.map(r => structuredClone(r));
+          if (q.columns) data = data.map(r => Object.fromEntries(q.columns.filter(c => c in r).map(c => [c, r[c]])));
           if (q.single) return data.length === 1 ? { data: data[0], error: null } : { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } };
           return { data, error: null, count: q.count ? total : undefined };
         }
@@ -182,6 +184,10 @@ export function createFakeCloud() {
           for (const r of targets) {
             rows.splice(rows.indexOf(r), 1);
             emit(table, 'DELETE', null, structuredClone(r));
+            // ON DELETE CASCADE: eliminando un documento spariscono i suoi pezzi
+            if (table === 'brain_documents') {
+              tables.brain_memories = tables.brain_memories.filter(m => m.document_id !== r.id);
+            }
           }
           return { data: null, error: null };
         }
@@ -189,10 +195,11 @@ export function createFakeCloud() {
       };
 
       const builder = {
-        select(_cols, opts = {}) {
+        select(cols, opts = {}) {
           if (q.op === 'select') {
             q.head = Boolean(opts.head);
             q.count = Boolean(opts.count);
+            if (typeof cols === 'string' && cols.trim() && cols.trim() !== '*') q.columns = cols.split(',').map(c => c.trim());
           } else q.returning = true;
           return builder;
         },
@@ -203,6 +210,10 @@ export function createFakeCloud() {
         eq(col, v) { q.filters.push(r => r[col] === v); return builder; },
         neq(col, v) { q.filters.push(r => r[col] !== v); return builder; },
         gt(col, v) { q.filters.push(r => String(r[col]) > String(v)); return builder; },
+        gte(col, v) { q.filters.push(r => r[col] !== null && r[col] !== undefined && String(r[col]) >= String(v)); return builder; },
+        lt(col, v) { q.filters.push(r => r[col] !== null && r[col] !== undefined && String(r[col]) < String(v)); return builder; },
+        lte(col, v) { q.filters.push(r => r[col] !== null && r[col] !== undefined && String(r[col]) <= String(v)); return builder; },
+        is(col, v) { q.filters.push(r => (v === null ? r[col] === null || r[col] === undefined : r[col] === v)); return builder; },
         in(col, list) { q.filters.push(r => list.includes(r[col])); return builder; },
         ilike(col, pattern) {
           const re = new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*')}$`, 'i');
@@ -219,8 +230,38 @@ export function createFakeCloud() {
       return builder;
     }
 
+    // Funzioni SQL richiamabili: la ricerca ibrida replica la formula di match_brain_memories_hybrid (migration 010)
+    async function rpc(name, params = {}) {
+      state.calls.push({ table: name, op: 'rpc', as: service ? 'service' : uid ? 'user' : 'anon' });
+      if (!service && !uid) return { data: null, error: { code: '42501', message: 'permission denied (not authenticated)' } };
+      if (name !== 'match_brain_memories_hybrid') return { data: null, error: { code: 'PGRST202', message: `function ${name} not found` } };
+      const emb = typeof params.query_embedding === 'string' ? JSON.parse(params.query_embedding) : params.query_embedding;
+      const source = params.filter_source || 'openai';
+      const out = [];
+      for (const m of tables.brain_memories) {
+        if (m.is_deleted) continue;
+        if (!service && m.user_id !== uid) continue;
+        if (params.filter_user && m.user_id !== params.filter_user) continue;
+        if (params.filter_domain && m.domain !== params.filter_domain) continue;
+        const doc = m.document_id ? tables.brain_documents.find(d => d.id === m.document_id) : null;
+        if (doc?.is_deleted) continue;
+        const memEmb = typeof m.embedding === 'string' ? JSON.parse(m.embedding) : m.embedding;
+        const s = hybridScore({ queryEmbedding: emb, queryText: params.query_text, embedding: m.embedding_source === source ? memEmb : null, text: `${m.title || ''} ${m.content || ''}` });
+        if (!(s.similarity > params.match_threshold || s.lexical > 0)) continue;
+        out.push({
+          id: m.id, document_id: m.document_id || null, chunk_index: m.chunk_index || 0, title: m.title, content: m.content,
+          domain: m.domain, source_type: m.source_type, source_date: m.source_date || doc?.original_date || null, created_at: m.created_at,
+          document_title: doc?.title || null, document_provider: doc?.source_provider || null,
+          similarity: s.similarity, lexical_rank: s.lexical, score: s.score,
+        });
+      }
+      out.sort((a, b) => b.score - a.score);
+      return { data: out.slice(0, params.match_count || 8), error: null };
+    }
+
     return {
       from,
+      rpc,
       channel(name) {
         const ch = { name, uid, handlers: [] };
         const api = {

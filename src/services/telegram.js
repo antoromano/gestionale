@@ -154,7 +154,7 @@ export async function registerTelegramWebhook(botTokenInput) {
  * @returns {{name: string, args: string}|null}
  */
 export function parseTelegramCommand(text = '') {
-  const m = String(text || '').trim().match(/^\/(queue|digest)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  const m = String(text || '').trim().match(/^\/(queue|digest|ask)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
   if (!m) return null;
   return { name: m[1].toLowerCase(), args: (m[2] || '').trim() };
 }

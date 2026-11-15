@@ -3,6 +3,10 @@
 
 import { store, defaultSettings } from '../services/store.js';
 import { aiDiagnose } from '../services/ai-client.js';
+import { NODE_TYPE_META, upsertFact, upsertNode, upsertGraphRelationship, syncClientToBrain, recalculateAllEmbeddings } from '../services/brain.js';
+import { recalculateDocumentEmbeddings } from '../services/brain-docs.js';
+import { openAssistantProfileModal } from './brain-profile.js';
+import { escapeHtml } from '../utils/formatters.js';
 import {
   getTelegramIntegrationStatus,
   sendTelegramTestMessage,
@@ -198,7 +202,7 @@ export function renderSettings(container, router) {
           </div>
 
           <div class="form-group">
-            <label class="form-label">Intelligenza artificiale (Gemini)</label>
+            <label class="form-label">Intelligenza artificiale</label>
             <div class="muted" style="margin-bottom: 8px;">
               La chiave vera sta al sicuro sul server (Supabase), non qui. Premi il pulsante per controllare se l'IA risponde davvero.
             </div>
@@ -207,8 +211,13 @@ export function renderSettings(container, router) {
             <details class="ai-options" style="margin-top: 12px;">
               <summary>Uso una mia chiave personale (solo su questo dispositivo)</summary>
               <div class="ai-options-body" style="display: block;">
+                <div class="muted" style="margin-bottom: 8px;">Servono solo se la chiave sul server non c'è. Non vengono mai sincronizzate né salvate nel cloud.</div>
+                <label class="form-label" for="set-openai-key">Chiave OpenAI (ChatGPT)</label>
+                <input type="password" id="set-openai-key" class="form-input" value="${settings.openai_api_key || ''}" placeholder="sk-..." autocomplete="off" />
+                <label class="form-label" for="set-openai-model" style="margin-top: 10px;">Modello OpenAI da usare con la chiave personale</label>
+                <input type="text" id="set-openai-model" class="form-input" value="${settings.openai_chat_model || ''}" placeholder="vuoto = scelgo io il modello 'mini' più recente" autocomplete="off" />
+                <label class="form-label" for="set-gemini-key" style="margin-top: 10px;">Chiave Gemini (riserva)</label>
                 <input type="password" id="set-gemini-key" class="form-input" value="${settings.gemini_api_key || ''}" placeholder="AIzaSy..." autocomplete="off" />
-                <div class="muted" style="margin-top: 4px;">Serve solo se la chiave sul server non c'è. Non viene mai sincronizzata né salvata nel cloud.</div>
               </div>
             </details>
           </div>
@@ -359,6 +368,116 @@ export function renderSettings(container, router) {
         </div>
       </form>
 
+      <!-- AVANZATE: SECOND BRAIN & MANUTENZIONE VETTORI -->
+      <div class="card" id="brain-advanced-card">
+        <div class="card-header">
+          <div class="card-title">Avanzate • Second Brain & Manutenzione Vettori</div>
+        </div>
+        <p class="muted" style="margin-bottom: 12px;">
+          Di norma non serve toccare nulla qui: fatti e collegamenti li crea l'assistente quando scrivi una nota o importi una fonte.
+          Questi strumenti servono per inserimenti a mano e per la manutenzione.
+        </p>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;">
+          <button type="button" id="adv-profile-btn" class="btn btn-secondary">Istruzioni e privacy dell'assistente</button>
+          <button type="button" id="adv-sync-clients-btn" class="btn btn-secondary" title="Copia nel Second Brain i dati dei clienti già presenti">Aggiorna dal gestionale</button>
+        </div>
+
+        <details class="ai-options">
+          <summary>Aggiungi un fatto a mano</summary>
+          <form id="manual-fact-form" class="form-row" style="flex-wrap: wrap; align-items: flex-end; padding-top: 10px;">
+            <div style="flex: 1.2; min-width: 150px;">
+              <label class="form-label">Di chi o di cosa parla *</label>
+              <input type="text" id="mf-subject" class="form-input" required placeholder="es. Io, TechCorp, Allenamento" />
+            </div>
+            <div style="flex: 1.2; min-width: 150px;">
+              <label class="form-label">Che cosa (chiave) *</label>
+              <input type="text" id="mf-key" class="form-input" required placeholder="es. target_kcal, tariffa_oraria" />
+            </div>
+            <div style="flex: 1.5; min-width: 180px;">
+              <label class="form-label">Valore *</label>
+              <input type="text" id="mf-value" class="form-input" required placeholder="es. 2400 kcal, 50 €/h" />
+            </div>
+            <div style="flex: 1; min-width: 130px;">
+              <label class="form-label">Tipo</label>
+              <select id="mf-category" class="form-select">
+                <option value="rule">Regola</option>
+                <option value="preference">Preferenza</option>
+                <option value="status" selected>Stato</option>
+                <option value="metric">Numero / misura</option>
+                <option value="client_info">Info cliente</option>
+              </select>
+            </div>
+            <div><button type="submit" class="btn btn-primary">Salva fatto</button></div>
+          </form>
+        </details>
+
+        <details class="ai-options">
+          <summary>Aggiungi un nodo o un collegamento alla mappa</summary>
+          <form id="manual-node-form" class="form-row" style="flex-wrap: wrap; align-items: flex-end; padding-top: 10px;">
+            <div style="flex: 2; min-width: 160px;">
+              <label class="form-label">Nuovo nodo *</label>
+              <input type="text" id="mn-label" class="form-input" required placeholder="es. Marco, Supabase, Progetto Alfa" />
+            </div>
+            <div style="flex: 1; min-width: 130px;">
+              <label class="form-label">Tipo</label>
+              <select id="mn-type" class="form-select">
+                ${Object.entries(NODE_TYPE_META).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join('')}
+              </select>
+            </div>
+            <div><button type="submit" class="btn btn-secondary">+ Aggiungi nodo</button></div>
+          </form>
+          <form id="manual-edge-form" class="form-row" style="flex-wrap: wrap; align-items: flex-end; padding-top: 12px; margin-top: 12px; border-top: 1px dashed var(--border);">
+            <div style="flex: 1.2; min-width: 140px;">
+              <label class="form-label">Da *</label>
+              <input type="text" id="me-source" class="form-input" required placeholder="es. TechCorp" />
+            </div>
+            <div style="flex: 0.9; min-width: 120px;">
+              <label class="form-label">Tipo</label>
+              <select id="me-source-type" class="form-select">
+                ${Object.entries(NODE_TYPE_META).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join('')}
+              </select>
+            </div>
+            <div style="flex: 1.1; min-width: 140px;">
+              <label class="form-label">Collegamento *</label>
+              <select id="me-relation" class="form-select">
+                <option value="USA_TECNOLOGIA">usa la tecnologia</option>
+                <option value="LAVORA_CON">lavora con</option>
+                <option value="CAUSA">causa</option>
+                <option value="MIGLIORA">migliora</option>
+                <option value="RIDUCE">riduce</option>
+                <option value="DIPENDE_DA">dipende da</option>
+                <option value="CORRELATO_A" selected>è collegato a</option>
+              </select>
+            </div>
+            <div style="flex: 1.2; min-width: 140px;">
+              <label class="form-label">A *</label>
+              <input type="text" id="me-target" class="form-input" required placeholder="es. Supabase" />
+            </div>
+            <div style="flex: 0.9; min-width: 120px;">
+              <label class="form-label">Tipo</label>
+              <select id="me-target-type" class="form-select">
+                ${Object.entries(NODE_TYPE_META).map(([k, v]) => `<option value="${k}" ${k === 'technology' ? 'selected' : ''}>${v.icon} ${v.label}</option>`).join('')}
+              </select>
+            </div>
+            <div><button type="submit" class="btn btn-secondary">+ Collega</button></div>
+          </form>
+        </details>
+
+        <details class="ai-options">
+          <summary>Ricalcola la ricerca per significato</summary>
+          <div style="padding-top: 10px;">
+            <p class="muted" style="margin-bottom: 10px;">
+              Ogni nota e ogni pezzo di documento ha una "impronta" numerica che permette di trovarlo anche con parole diverse.
+              Va ricalcolata se è cambiato il fornitore dell'IA o se alcune note risultano "solo parole". Costa pochi centesimi.
+            </p>
+            <button type="button" id="adv-recalc-embeddings-btn" class="btn btn-secondary">Ricalcola tutto</button>
+            <span id="adv-recalc-status" class="muted" style="margin-left: 10px;"></span>
+          </div>
+        </details>
+        <div id="brain-advanced-feedback" style="margin-top: 10px;"></div>
+      </div>
+
       <!-- 5. GESTIONE DATI: DEMO E RESET -->
       <div class="card" style="border-color: rgba(220, 38, 38, 0.2);">
         <div class="card-header">
@@ -443,6 +562,8 @@ export function renderSettings(container, router) {
       vat_percent: parseFloat(container.querySelector('#set-vat-percent').value) || 0,
       quote_default_conditions: container.querySelector('#set-default-conditions').value.trim(),
       gemini_api_key: container.querySelector('#set-gemini-key').value.trim(),
+      openai_api_key: container.querySelector('#set-openai-key').value.trim(),
+      openai_chat_model: container.querySelector('#set-openai-model').value.trim(),
       dev_hourly_rate: parseFloat(container.querySelector('#set-dev-hourly-rate').value) || 50,
       supabase_url: container.querySelector('#set-supabase-url').value.trim(),
       supabase_anon_key: container.querySelector('#set-supabase-key').value.trim(),
@@ -473,6 +594,69 @@ export function renderSettings(container, router) {
   });
 
   // Reset Totale Dati
+  // --- Avanzate • Second Brain ---
+  const advFeedback = (msg, kind = 'ok') => {
+    const box = container.querySelector('#brain-advanced-feedback');
+    if (box) box.innerHTML = `<div class="notice ${kind}">${escapeHtml(msg)}</div>`;
+  };
+  container.querySelector('#adv-profile-btn')?.addEventListener('click', () => openAssistantProfileModal());
+  container.querySelector('#adv-sync-clients-btn')?.addEventListener('click', () => {
+    const clients = store.getAll('clients');
+    clients.forEach(c => syncClientToBrain(c));
+    advFeedback(`Aggiornati nel Second Brain ${clients.length} clienti.`);
+  });
+  container.querySelector('#manual-fact-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const res = upsertFact({
+      subject: container.querySelector('#mf-subject').value.trim(),
+      fact_key: container.querySelector('#mf-key').value.trim(),
+      fact_value: container.querySelector('#mf-value').value.trim(),
+      category: container.querySelector('#mf-category').value,
+    });
+    if (!res) { advFeedback('Compila tutti i campi del fatto.', 'err'); return; }
+    e.target.reset();
+    advFeedback(res.action === 'superseded'
+      ? `Fatto aggiornato: ${res.fact_key} = ${res.fact_value} (il valore di prima è nello storico).`
+      : `Fatto salvato: ${res.fact_key} = ${res.fact_value}.`);
+  });
+  container.querySelector('#manual-node-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const node = upsertNode({ label: container.querySelector('#mn-label').value.trim(), node_type: container.querySelector('#mn-type').value });
+    if (!node) { advFeedback('Scrivi il nome del nodo.', 'err'); return; }
+    e.target.reset();
+    advFeedback(`Nodo aggiunto alla mappa: ${node.label}.`);
+  });
+  container.querySelector('#manual-edge-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const res = upsertGraphRelationship({
+      source: container.querySelector('#me-source').value.trim(),
+      source_type: container.querySelector('#me-source-type').value,
+      target: container.querySelector('#me-target').value.trim(),
+      target_type: container.querySelector('#me-target-type').value,
+      relation_type: container.querySelector('#me-relation').value,
+      evidence: 'Aggiunto a mano dalle Impostazioni',
+    });
+    if (!res) { advFeedback('I due nodi devono avere nomi diversi.', 'err'); return; }
+    e.target.reset();
+    advFeedback(`Collegamento salvato: ${res.sourceNode.label} → ${res.targetNode.label}.`);
+  });
+  container.querySelector('#adv-recalc-embeddings-btn')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const status = container.querySelector('#adv-recalc-status');
+    btn.disabled = true;
+    try {
+      const notes = await recalculateAllEmbeddings({ onProgress: ({ done, total }) => { status.textContent = `Note: ${done} di ${total}…`; } });
+      const docs = await recalculateDocumentEmbeddings({ onProgress: ({ done, total }) => { status.textContent = `Documenti: ${done} di ${total} pezzi…`; } });
+      status.textContent = '';
+      advFeedback(`Fatto: ricalcolate ${notes.updated} note e ${docs.updated} pezzi di documenti${notes.source || docs.source ? ` (fornitore: ${notes.source || docs.source})` : ''}.`);
+    } catch (err) {
+      status.textContent = '';
+      advFeedback(`Non riuscito: ${err.message}`, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   container.querySelector('#reset-all-data-btn').addEventListener('click', () => {
     if (confirm('ATTENZIONE: Questa azione cancellerà permanentemente TUTTI i dati inseriti (clienti, preventivi, to-do, spese, impostazioni). Procedere?')) {
       store.clearAll();

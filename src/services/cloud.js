@@ -20,7 +20,14 @@ const POLL_MS = 60000;
 const PULL_MARGIN_MS = 3000;
 
 // Impostazioni che NON devono mai finire nel cloud (restano su questo dispositivo)
-export const LOCAL_ONLY_SETTINGS = ['gemini_api_key', 'telegram_bot_token', 'github_token', 'supabase_url', 'supabase_anon_key'];
+export const LOCAL_ONLY_SETTINGS = ['gemini_api_key', 'openai_api_key', 'telegram_bot_token', 'github_token', 'supabase_url', 'supabase_anon_key'];
+
+// Archivio personale: i "pezzi" dei documenti importati (brain_memories con document_id) e il testo originale dei
+// documenti (brain_documents.raw_content) vivono SOLO nel cloud. Sono migliaia di righe con un vettore ciascuna:
+// nel browser non entrerebbero (limite di pochi MB) e rallenterebbero ogni avvio. Si leggono e si scrivono
+// direttamente (src/services/brain-docs.js) e si cercano sul server.
+const CLOUD_ONLY_COLUMNS = { brain_documents: ['raw_content'] };
+export const isCloudOnlyRow = (table, item) => table === 'brain_memories' && Boolean(item?.document_id);
 
 // Colonne timestamptz che l'app usa come "ora a muro" senza fuso (datetime-local): si restituiscono senza suffisso
 const WALL_CLOCK = { todos: ['due_date'], appointments: ['start_time', 'end_time'] };
@@ -90,6 +97,8 @@ export function fromRow(table, row) {
   for (const col of WALL_CLOCK[table] || []) {
     if (typeof item[col] === 'string') item[col] = item[col].replace(/(?:Z|[+-]00(?::?00)?)$/, '');
   }
+  for (const col of CLOUD_ONLY_COLUMNS[table] || []) delete item[col];
+  if (table === 'brain_memories') delete item.fts; // colonna calcolata dal database: non serve nel browser
   if (item.is_deleted === undefined && 'is_deleted' in CLOUD_SCHEMA[table]) item.is_deleted = false;
   return item;
 }
@@ -206,7 +215,7 @@ class CloudSync {
   // --- differenze locali vs cloud -------------------------------------------
   _collect(table) {
     if (table === 'settings') return [{ id: '__settings__', item: store.data.settings }];
-    return (store.data[table] || []).filter(it => it && it.id).map(it => ({ id: it.id, item: it }));
+    return (store.data[table] || []).filter(it => it && it.id && !isCloudOnlyRow(table, it)).map(it => ({ id: it.id, item: it }));
   }
 
   _diff() {
@@ -315,7 +324,10 @@ class CloudSync {
   async _fetchTable(table, since = null) {
     const rows = [];
     for (let from = 0; ; from += PAGE_SIZE) {
-      let q = this.client.from(table).select('*');
+      const hidden = CLOUD_ONLY_COLUMNS[table] || [];
+      const columns = hidden.length ? Object.keys(CLOUD_SCHEMA[table]).filter(c => !hidden.includes(c)).join(',') : '*';
+      let q = this.client.from(table).select(columns);
+      if (table === 'brain_memories') q = q.is('document_id', null);
       if (since) q = q.gt('updated_at', since);
       const { data, error } = await q.order('created_at', { ascending: true }).range(from, from + PAGE_SIZE - 1);
       if (error) throw Object.assign(new Error(error.message), { table, code: error.code });
@@ -463,7 +475,7 @@ class CloudSync {
         }
         return;
       }
-      if (payload.new) {
+      if (payload.new && !isCloudOnlyRow(table, payload.new)) {
         this._mergeRemote(table, [payload.new], false);
         store.save();
       }

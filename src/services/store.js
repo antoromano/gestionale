@@ -56,6 +56,8 @@ export const defaultSettings = {
   notion_database_id: '',
   notion_sync_last_at: null,
   gemini_api_key: '',
+  openai_api_key: '',      // chiave personale facoltativa: resta solo su questo dispositivo (di norma la chiave sta sul server)
+  openai_chat_model: '',   // vuoto = scelta automatica del modello "mini" più recente
   dev_hourly_rate: 50,
   business_type: 'software_dev',
   github_token: '',
@@ -112,6 +114,8 @@ function createEmptyData() {
     body_workout_entries: [],
     telegram_pending_actions: [],
     telegram_bot_subscribers: [],
+    brain_documents: [],
+    brain_assistant_profiles: [],
   };
 }
 
@@ -122,6 +126,8 @@ class Store {
     this.entityHooks = new Set();
     this._batchDepth = 0;
     this._dirty = false;
+    this.saveHooks = new Set();
+    this.bulkDeleteAllowedUntil = 0;
     this.init();
   }
 
@@ -214,13 +220,33 @@ class Store {
       return;
     }
     try {
-      if (typeof localStorage === 'undefined') return;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.data.settings));
-      this.notify();
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.data.settings));
+        this.notify();
+      }
     } catch (err) {
       console.error('Errore nel salvataggio del database locale:', err);
     }
+    // Hook di sincronizzazione (cloud): indipendente dalla disponibilità di localStorage
+    for (const hook of this.saveHooks) {
+      try {
+        hook();
+      } catch (err) {
+        console.warn('Errore nel hook di salvataggio:', err);
+      }
+    }
+  }
+
+  /** Registra una funzione chiamata dopo ogni salvataggio (usata dalla sincronizzazione cloud). */
+  onSave(hook) {
+    this.saveHooks.add(hook);
+    return () => this.saveHooks.delete(hook);
+  }
+
+  /** Autorizza per qualche secondo le eliminazioni di massa (reset, svuota cestino, ripristino backup). */
+  allowBulkDelete(ms = 15000) {
+    this.bulkDeleteAllowedUntil = Date.now() + ms;
   }
 
   subscribe(listener) {
@@ -380,6 +406,7 @@ class Store {
   }
 
   emptyTrash() {
+    this.allowBulkDelete();
     for (const col of TRASHABLE_COLLECTIONS) {
       if (this.data[col]) {
         this.data[col] = this.data[col].filter(item => !item.is_deleted);
@@ -472,6 +499,62 @@ class Store {
       ...logData,
       date: dateStr,
     });
+  }
+
+  /**
+   * Elimina i dati biometrici/nutrizionali di una data (es. inserita per errore).
+   * Se quel giorno ha allenamenti registrati, la riga resta (serve agli allenamenti) ma viene svuotata.
+   * @returns {'deleted'|'cleared'|null}
+   */
+  deleteBodyDailyLog(dateStr) {
+    const date = String(dateStr || '').split('T')[0];
+    const log = (this.data.body_daily_logs || []).find(l => !l.is_deleted && l.date === date);
+    if (!log) return null;
+    const hasWorkouts = (this.data.body_workout_entries || []).some(e => !e.is_deleted && e.date === date);
+    if (hasWorkouts) {
+      this.update('body_daily_logs', log.id, {
+        sleep_hours: null, sleep_quality: null, body_weight_kg: null, calories_kcal: null,
+        protein_g: null, carbs_g: null, fat_g: null, energy_level: null, is_rest_day: false, general_notes: '',
+      });
+      return 'cleared';
+    }
+    this.permanentDelete('body_daily_logs', log.id);
+    return 'deleted';
+  }
+
+  /** Modifica nome, frequenza obiettivo (giorni) e varianti di una colonna esercizio. */
+  updateBodyColumn(columnId, { name, target_frequency_days, available_variants } = {}) {
+    const patch = {};
+    if (name !== undefined && String(name).trim()) patch.name = String(name).trim();
+    if (target_frequency_days !== undefined) patch.target_frequency_days = Math.max(1, parseInt(target_frequency_days, 10) || 3);
+    if (available_variants !== undefined) {
+      const list = (Array.isArray(available_variants) ? available_variants : String(available_variants).split(','))
+        .map(v => String(v).trim()).filter(Boolean);
+      if (!list.includes('Standard')) list.unshift('Standard');
+      patch.available_variants = [...new Set(list)];
+    }
+    return this.update('body_exercise_columns', columnId, patch);
+  }
+
+  /** Sposta una colonna esercizio su (-1) o giù (+1) nell'ordine della matrice. */
+  moveBodyColumn(columnId, direction) {
+    const cols = this.getBodyColumns();
+    const idx = cols.findIndex(c => c.id === columnId);
+    const target = idx + (direction < 0 ? -1 : 1);
+    if (idx === -1 || target < 0 || target >= cols.length) return false;
+    const reordered = [...cols];
+    [reordered[idx], reordered[target]] = [reordered[target], reordered[idx]];
+    this.runBatch(() => {
+      reordered.forEach((c, i) => {
+        if (c.position !== i) this.update('body_exercise_columns', c.id, { position: i });
+      });
+    });
+    return true;
+  }
+
+  /** Archivia una colonna esercizio: sparisce dalla matrice ma gli allenamenti già registrati restano. */
+  archiveBodyColumn(columnId) {
+    return this.update('body_exercise_columns', columnId, { is_active: false });
   }
 
   upsertBodyWorkoutEntry(entryData = {}) {
@@ -613,6 +696,86 @@ class Store {
     return this.getQuoteWithDetails(quoteId);
   }
 
+  /** Prossimo numero libero per un preventivo (PREV-ANNO-NNN), evitando doppioni. */
+  nextQuoteNumber() {
+    const year = new Date().getFullYear();
+    const used = new Set(this.getAll('quotes', true).map(q => q.quote_number));
+    let n = this.getAll('quotes').length + 1;
+    let candidate = `PREV-${year}-${String(n).padStart(3, '0')}`;
+    while (used.has(candidate)) {
+      n++;
+      candidate = `PREV-${year}-${String(n).padStart(3, '0')}`;
+    }
+    return candidate;
+  }
+
+  /**
+   * Duplica un preventivo con voci, immagini e servizi extra: nuova bozza con nuovo numero.
+   * Pagamenti e stato di lavoro NON vengono copiati (è un preventivo nuovo).
+   * @returns {{quote, items, extraServices, payments, client}|null}
+   */
+  duplicateQuote(quoteId) {
+    const details = this.getQuoteWithDetails(quoteId);
+    if (!details) return null;
+    const { id: _id, created_at: _c, updated_at: _u, deleted_at: _d, ...rest } = details.quote;
+    const today = new Date().toISOString().split('T')[0];
+    const quote = {
+      ...rest,
+      quote_number: this.nextQuoteNumber(),
+      title: `${details.quote.title || 'Preventivo'} (copia)`,
+      status: 'bozza',
+      work_status: 'Da iniziare',
+      issue_date: today,
+    };
+    const items = details.items.map(({ id: _i, quote_id: _q, created_at: _ic, images = [], ...it }) => ({
+      ...it,
+      images: images.map(({ id: _ii, quote_item_id: _qi, created_at: _imc, ...img }) => ({ ...img })),
+    }));
+    const extraServices = details.extraServices.map(({ id: _e, quote_id: _eq, created_at: _ec, ...es }) => ({ ...es }));
+    return this.saveFullQuote({ quote, items, extraServices });
+  }
+
+  /** Duplica una voce del listino servizi. */
+  duplicateCatalogItem(itemId) {
+    const item = this.getById('services_catalog', itemId);
+    if (!item) return null;
+    const { id: _id, created_at: _c, updated_at: _u, deleted_at: _d, ...rest } = item;
+    return this.create('services_catalog', { ...rest, name: `${item.name || 'Servizio'} (copia)` });
+  }
+
+  /**
+   * Crea (index = null) o modifica (index = posizione) un canone di manutenzione del cliente.
+   * I canoni vivono nel campo `maintenance_contracts` del cliente.
+   */
+  saveClientContract(clientId, contract, index = null) {
+    const client = this.getById('clients', clientId);
+    if (!client) return null;
+    const list = Array.isArray(client.maintenance_contracts) ? [...client.maintenance_contracts] : [];
+    const clean = {
+      title: String(contract.title || '').trim() || 'Canone Manutenzione',
+      amount: Number(contract.amount) || 0,
+      frequency: ['monthly', 'quarterly', 'annual'].includes(contract.frequency) ? contract.frequency : 'monthly',
+      billing_day: contract.billing_day ? Math.min(31, Math.max(1, parseInt(contract.billing_day, 10) || 1)) : null,
+      status: contract.status === 'paused' ? 'paused' : 'active',
+      notes: String(contract.notes || '').trim(),
+    };
+    if (index === null || index === undefined || !list[index]) {
+      list.push({ ...clean, created_at: new Date().toISOString() });
+    } else {
+      list[index] = { ...list[index], ...clean, updated_at: new Date().toISOString() };
+    }
+    return this.update('clients', clientId, { maintenance_contracts: list });
+  }
+
+  /** Sospende o riattiva un canone (Attivo ↔ In pausa). */
+  toggleClientContract(clientId, index) {
+    const client = this.getById('clients', clientId);
+    const list = Array.isArray(client?.maintenance_contracts) ? [...client.maintenance_contracts] : [];
+    if (!list[index]) return null;
+    list[index] = { ...list[index], status: list[index].status === 'active' ? 'paused' : 'active', updated_at: new Date().toISOString() };
+    return this.update('clients', clientId, { maintenance_contracts: list });
+  }
+
   // --- QUERY SPECIFICHE PER SCHEDA CLIENTE ---
   getClientFullProfile(clientId) {
     const client = this.getById('clients', clientId);
@@ -752,21 +915,9 @@ class Store {
     return count;
   }
 
-  // --- CARICAMENTO DATI DIMOSTRATIVI FACOLTATIVI ---
-  loadSampleData(sampleJson) {
-    if (!sampleJson) return false;
-    this.data = {
-      ...this.data,
-      ...sampleJson,
-      settings: { ...this.data.settings, ...(sampleJson.settings || {}) },
-    };
-    this.migrateLegacyExpenses();
-    this.save();
-    return true;
-  }
-
   // --- RESET TOTALE DATI ---
   clearAll() {
+    this.allowBulkDelete();
     this.data = createEmptyData();
     this.save();
   }

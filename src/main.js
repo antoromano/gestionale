@@ -15,8 +15,12 @@ import { renderCatalog } from './modules/catalog.js';
 import { renderSettings } from './modules/settings.js';
 import { renderHelp } from './modules/help.js';
 import { renderTrash } from './modules/trash.js';
-import { openAiModal } from './modules/ai-assistant.js';
-import { mountNoteQueueWidget } from './modules/note-queue-ui.js';
+import { buildShell, wireInbox, PAGE_TITLES } from './modules/shell.js';
+import { showAuthScreen, hideAuthScreen } from './modules/auth-screen.js';
+import { mountSyncStatus } from './modules/sync-status.js';
+import { getSupabase } from './services/supabase.js';
+import { getSession, signOut, onAuthChange } from './services/auth.js';
+import { cloud } from './services/cloud.js';
 import { exportFullBackup, openImportModal } from './modules/backup.js';
 
 // Espone i moduli globalmente per interazioni rapide
@@ -29,10 +33,12 @@ const ROUTE_ALIASES = {
   expenses: 'finances',
 };
 
-class Router {
+export class Router {
   constructor() {
     this.currentRoute = 'dashboard';
     this.routeParams = {};
+    this.historyStack = []; // rotte visitate prima di quella corrente: [{ route, params }]
+    this.subBack = null;    // "torna indietro" di una sottovista (es. Scheda Cliente → elenco)
     this.container = document.getElementById('app-main-content');
     this.pageTitle = document.getElementById('page-title-text');
     this.sidebar = document.getElementById('app-sidebar');
@@ -76,13 +82,9 @@ class Router {
       });
     }
 
-    // AI Global buttons
-    document.getElementById('sidebar-ai-btn')?.addEventListener('click', () => openAiModal({ onSaved: () => this.refresh() }));
-    document.getElementById('top-ai-btn')?.addEventListener('click', () => openAiModal({ onSaved: () => this.refresh() }));
-    document.getElementById('bottom-nav-ai-btn')?.addEventListener('click', () => openAiModal({ onSaved: () => this.refresh() }));
-
-    // Coda Appunti del Giorno: box flottante sempre disponibile; "Elabora Coda" apre l'assistente e avvia 1 sola chiamata
-    mountNoteQueueWidget({ onProcess: () => openAiModal({ autoProcessQueue: true, onSaved: () => this.refresh() }) });
+    // Pulsante "Indietro" nella barra in alto
+    this.backBtn = document.getElementById('top-back-btn');
+    this.backBtn?.addEventListener('click', () => this.goBack());
 
     // Backup quick actions
     document.getElementById('quick-backup-export')?.addEventListener('click', () => exportFullBackup());
@@ -101,15 +103,20 @@ class Router {
     this.navigate('dashboard');
   }
 
-  navigate(route, params = {}) {
+  navigate(route, params = {}, { fromBack = false } = {}) {
     route = ROUTE_ALIASES[route] || route;
     if (!this.routes[route]) route = 'dashboard';
+    if (!fromBack && route !== this.currentRoute) {
+      this.historyStack.push({ route: this.currentRoute, params: this.routeParams });
+      if (this.historyStack.length > 50) this.historyStack.shift();
+    }
+    this.subBack = null; // la vista che si apre, se è una sottovista, lo reimposta da sé
     this.currentRoute = route;
     this.routeParams = params;
 
     // Aggiorna titolo pagina
     if (this.pageTitle) {
-      this.pageTitle.textContent = this.routes[route].title;
+      this.pageTitle.textContent = PAGE_TITLES[route] || this.routes[route].title;
     }
 
     // Aggiorna stato attivo nella navigazione
@@ -121,15 +128,40 @@ class Router {
       }
     });
 
-    // Mostra/Nasconde menu toggle su mobile per sezioni oltre le 5 principali
-    const menuToggle = document.getElementById('mobile-menu-toggle');
-    if (menuToggle) {
-      menuToggle.style.display = (window.innerWidth < 1024) ? 'inline-flex' : 'none';
-    }
-
     // Renderizza la vista attiva
     this.routes[route].render(this.container, this, params);
+    document.body.dataset.route = route;
+    this.updateBackButton();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  /** Una sottovista (es. Scheda Cliente) dichiara come tornare al proprio elenco. null = nessuna sottovista. */
+  setBack(fn) {
+    this.subBack = typeof fn === 'function' ? fn : null;
+    this.updateBackButton();
+  }
+
+  canGoBack() {
+    return Boolean(this.subBack) || this.historyStack.length > 0;
+  }
+
+  /** Torna indietro: prima esce dalla sottovista, poi risale la cronologia delle pagine. */
+  goBack() {
+    if (this.subBack) {
+      const fn = this.subBack;
+      this.subBack = null;
+      fn();
+      this.updateBackButton();
+      return true;
+    }
+    const prev = this.historyStack.pop();
+    if (!prev) { this.updateBackButton(); return false; }
+    this.navigate(prev.route, prev.params || {}, { fromBack: true });
+    return true;
+  }
+
+  updateBackButton() {
+    if (this.backBtn) this.backBtn.hidden = !this.canGoBack();
   }
 
   refresh() {
@@ -195,9 +227,48 @@ class Router {
   }
 }
 
-// Inizializza l'applicazione al DOMContentLoaded
-document.addEventListener('DOMContentLoaded', () => {
+// --- Avvio: login → sincronizzazione cloud → interfaccia ---
+async function startApp(session) {
+  hideAuthScreen();
+  document.body.classList.remove('is-locked');
+  document.body.classList.add('is-loading');
+
+  const client = getSupabase();
+  await cloud.start(client, session.user.id, {
+    confirmUploadLocal: async (count) => window.confirm(
+      `Ho trovato ${count} dati salvati solo in questo browser (versione precedente dell'app).\n\n` +
+      'OK = caricali nel cloud\nAnnulla = scartali e parti da zero (il cloud è la fonte unica dei dati)'
+    ),
+  });
+
+  document.body.classList.remove('is-loading');
+  buildShell();
   window.appRouter = new Router();
+  wireInbox(window.appRouter);
+  mountSyncStatus(document.querySelector('.top-actions'));
+
+  document.getElementById('logout-btn')?.addEventListener('click', async () => {
+    cloud.stop();
+    await signOut();
+    location.reload();
+  });
+  onAuthChange((event) => {
+    if (event === 'SIGNED_OUT') location.reload();
+  });
+}
+
+async function boot() {
+  document.body.classList.add('is-locked');
+  const session = await getSession();
+  if (!session) {
+    showAuthScreen({ onSuccess: (s) => startApp(s) });
+    return;
+  }
+  await startApp(session);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  boot();
 
   // Registrazione Service Worker per PWA
   if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {

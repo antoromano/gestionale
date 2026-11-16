@@ -5,6 +5,7 @@ import { store } from '../services/store.js';
 import { formatCurrency, formatDate } from '../utils/formatters.js';
 import { calculateQuoteTotals, calculatePaymentBalance } from '../utils/calculations.js';
 import { generateId } from '../utils/id.js';
+import { openTodoModal } from './todos.js';
 
 export function openQuoteManagerModal(quoteId, parentContainer, router, onUpdated) {
   const modalContainer = parentContainer.querySelector('#quotes-modal-container') || document.body;
@@ -100,7 +101,7 @@ export function openQuoteManagerModal(quoteId, parentContainer, router, onUpdate
 
             <!-- Form Registrazione Rapida Pagamento (incluso acconto) -->
             <div id="qm-payment-form-pane" style="display: none; padding: 14px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px;">
-              <div style="font-weight: 700; font-size: 13px; margin-bottom: 10px;">Nuovo Movimento Pagamento</div>
+              <div id="p-form-title" style="font-weight: 700; font-size: 13px; margin-bottom: 10px;">Nuovo Movimento Pagamento</div>
               <div class="form-row">
                 <div class="form-group" style="flex: 1;">
                   <label class="form-label">Tipo Movimento *</label>
@@ -187,7 +188,8 @@ export function openQuoteManagerModal(quoteId, parentContainer, router, onUpdate
                         <span style="font-size: 16px; font-weight: 800; color: ${isRefund ? 'var(--danger)' : isCollected ? 'var(--success)' : 'var(--text-muted)'};">
                           ${isRefund ? '-' : ''}${formatCurrency(p.amount)}
                         </span>
-                        <button type="button" class="btn btn-sm btn-danger qm-delete-payment-btn" data-id="${p.id}" title="Elimina pagamento">✕</button>
+                        <button type="button" class="btn btn-sm btn-secondary qm-edit-payment-btn" data-id="${p.id}" title="Modifica (es. da previsto a incassato, importo o data)">✏️</button>
+                        <button type="button" class="btn btn-sm btn-danger qm-delete-payment-btn" data-id="${p.id}" title="Elimina pagamento">🗑️</button>
                       </div>
                     </div>
                   `;
@@ -277,11 +279,15 @@ export function openQuoteManagerModal(quoteId, parentContainer, router, onUpdate
             ` : `
               <div style="display: flex; flex-direction: column; gap: 6px;">
                 ${linkedTodos.map(t => `
-                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
-                    <div style="font-size: 13px; font-weight: 500; ${t.is_completed ? 'text-decoration: line-through; opacity: 0.6;' : ''}">
+                  <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+                    <input type="checkbox" class="qm-todo-check" data-id="${t.id}" ${t.is_completed ? 'checked' : ''} title="${t.is_completed ? 'Riapri' : 'Segna come fatto'}" style="width: 16px; height: 16px; cursor: pointer; flex-shrink: 0;" />
+                    <div style="font-size: 13px; font-weight: 500; flex: 1; min-width: 0; ${t.is_completed ? 'text-decoration: line-through; opacity: 0.6;' : ''}">
                       ${t.title}
                     </div>
-                    <span class="badge ${t.is_completed ? 'badge-green' : 'badge-gray'}">${t.is_completed ? 'Fatto' : 'Da fare'}</span>
+                    <div class="row-actions">
+                      <span class="badge ${t.is_completed ? 'badge-green' : 'badge-gray'}">${t.is_completed ? 'Fatto' : 'Da fare'}</span>
+                      <button type="button" class="btn btn-sm btn-secondary qm-edit-todo-btn" data-id="${t.id}" title="Modifica to-do">✏️</button>
+                    </div>
                   </div>
                 `).join('')}
               </div>
@@ -330,10 +336,55 @@ export function openQuoteManagerModal(quoteId, parentContainer, router, onUpdate
     openQuoteManagerModal(quoteId, parentContainer, router, onUpdated);
   });
 
-  // Toggle form pagamento
+  // Toggle form pagamento (lo stesso modulo serve per crearne uno nuovo o modificarne uno esistente)
   const payFormPane = div.querySelector('#qm-payment-form-pane');
+  let editingPaymentId = null;
+  const reopen = () => {
+    div.remove();
+    openQuoteManagerModal(quoteId, parentContainer, router, onUpdated);
+  };
   div.querySelector('#qm-add-payment-btn').addEventListener('click', () => {
+    editingPaymentId = null;
+    div.querySelector('#p-form-title').textContent = 'Nuovo Movimento Pagamento';
+    div.querySelector('#p-save-btn').textContent = 'Salva Pagamento';
     payFormPane.style.display = 'block';
+  });
+  div.querySelectorAll('.qm-edit-payment-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = payments.find(x => x.id === btn.getAttribute('data-id'));
+      if (!p) return;
+      editingPaymentId = p.id;
+      div.querySelector('#p-form-title').textContent = 'Modifica Pagamento';
+      div.querySelector('#p-save-btn').textContent = 'Salva Modifiche';
+      div.querySelector('#p-type').value = p.type || 'acconto';
+      div.querySelector('#p-amount').value = p.amount ?? '';
+      div.querySelector('#p-status').value = p.status || 'incassato';
+      div.querySelector('#p-date').value = String(p.payment_date || p.due_date || '').slice(0, 10);
+      div.querySelector('#p-method').value = p.method || 'Bonifico';
+      div.querySelector('#p-ref').value = p.reference_number || '';
+      div.querySelector('#p-notes').value = p.notes || '';
+      payFormPane.style.display = 'block';
+      payFormPane.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  });
+
+  // To-do collegati: fatto/riapri e modifica
+  div.querySelectorAll('.qm-todo-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      store.update('todos', cb.getAttribute('data-id'), {
+        is_completed: cb.checked,
+        completed_at: cb.checked ? new Date().toISOString() : null,
+      });
+      reopen();
+    });
+  });
+  div.querySelectorAll('.qm-edit-todo-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const todo = store.getById('todos', btn.getAttribute('data-id'));
+      if (!todo) return;
+      div.remove(); // si chiude questa finestra: al salvataggio la pagina sotto si ridisegna
+      openTodoModal(todo, parentContainer, router);
+    });
   });
   div.querySelector('#p-cancel-btn').addEventListener('click', () => {
     payFormPane.style.display = 'none';
@@ -351,7 +402,7 @@ export function openQuoteManagerModal(quoteId, parentContainer, router, onUpdate
     const status = div.querySelector('#p-status').value;
     const dateVal = div.querySelector('#p-date').value;
 
-    store.create('payments', {
+    const paymentPayload = {
       quote_id: quoteId,
       client_id: quote.client_id || null,
       type,
@@ -362,7 +413,9 @@ export function openQuoteManagerModal(quoteId, parentContainer, router, onUpdate
       method: div.querySelector('#p-method').value,
       reference_number: div.querySelector('#p-ref').value.trim(),
       notes: div.querySelector('#p-notes').value.trim(),
-    });
+    };
+    if (editingPaymentId) store.update('payments', editingPaymentId, paymentPayload);
+    else store.create('payments', paymentPayload);
 
     div.remove();
     openQuoteManagerModal(quoteId, parentContainer, router, onUpdated);

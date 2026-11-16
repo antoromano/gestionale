@@ -1,210 +1,127 @@
 // supabase/functions/gemini-assistant/index.ts
-// Edge Function per l'assistente IA basato su Google Gemini (Multimodal: Testo, Immagini, Audio)
+// Proxy autenticato verso l'IA: le chiavi restano sul server (secret GEMINI_API_KEY e ANTHROPIC_API_KEY) e solo
+// l'utente loggato può usarle (verify_jwt attivo). I modelli NON sono scritti nel codice: si scoprono dai fornitori.
+//
+// Due fornitori in fila: Gemini (modello "lite", senza ragionamento, con un tetto di pochi secondi) e, se fallisce,
+// Claude. La risposta dice sempre chi ha risposto, così nell'app non ci sono successi finti.
+//
+// Azioni (POST JSON):
+//   { action: "generate", system?, parts: [{text}|{inline_data}], temperature?, json? }  → { ok, data, model, provider, ms }
+//   { action: "embed", text | texts: [...] }                                             → { ok, values, vectors, model, source }
+//   { action: "diagnose" }                                                               → { ok, openai: {...}, gemini: {...}, anthropic: {...} }
+// Errore: { ok: false, error: { code, message } } con HTTP 200 (così il client lo legge sempre e lo mostra).
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { embed, diagnose } from "./gemini-core.js";
+import { generateStructured, resolveAnthropicModel, anthropicGenerate, resolveOpenAIModel, openaiGenerate, openaiEmbed } from "./ai-providers.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-interface RequestPayload {
-  prompt?: string;
-  imageBase64?: string;
-  imageMimeType?: string;
-  audioBase64?: string;
-  audioMimeType?: string;
-  existingClients?: Array<{ id: string; name: string }>;
-  currentDateIso?: string;
-  timezone?: string;
-  // Profili specializzati (Agent Personas) inviati dal client: vedi AI_PROFILES in src/services/ai.js
-  profile?: string;
-  personaInstruction?: string;
-  secondBrainContext?: string;
-  activeModule?: string | null;
-  temperature?: number;
-}
-
-const KNOWN_PROFILES = ["ingestion_batch", "devils_advocate", "nutrition_fitness", "finance_coach", "general_brain"];
-
-// Campi opzionali oltre a todos/appointments, allineati alla chiamata diretta a Gemini del client
-const EXTENDED_SCHEMA = `
-CAMPI OPZIONALI AGGIUNTIVI NELLA RISPOSTA JSON (inclusi solo se pertinenti):
-  "clients_to_create": [{ "company_name": "", "first_name": "", "last_name": "", "email": "", "phone": "", "staging_url": "", "production_url": "", "github_repo": "", "stack": "", "maintenance_amount": 0, "maintenance_frequency": "monthly|quarterly|annual", "notes": "" }],
-  "body_log": { "date": "YYYY-MM-DD", "sleep_hours": null, "body_weight_kg": null, "calories_kcal": null, "protein_g": null, "carbs_g": null, "fat_g": null, "workout_entries": [{ "column_slug": "pull_up|dips|push_up|lunges|squat_sissy|hamstrings|deadlift|cardio_sport", "column_name": "", "raw_notation": "" }] },
-  "finance_transactions": [{ "type": "income|expense", "amount": 0, "description": "", "category": "", "date": "YYYY-MM-DD", "client_id": null, "payment_method": "bonifico|carta|contanti|paypal|addebito|altro" }],
-  "trading_items": [{ "title": "", "platform": "Vinted|Subito|eBay|Altro", "purchase_price": 0, "extra_costs": 0, "platform_fees": 0, "sale_price": null, "status": "in_stock|reserved|sold" }],
-  "critique": { "verdict": "", "risks": [""], "recommendations": [""], "buffer_percent": { "min": 0, "max": 0 }, "hourly_profit": null }
-`;
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  const openaiKey = Deno.env.get("OPENAI_API_KEY") || "";
+  const geminiKey = Deno.env.get("GEMINI_API_KEY") || "";
+  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY") || "";
+  if (!openaiKey && !geminiKey && !anthropicKey) {
+    return json({ ok: false, error: { code: "no_api_key", message: "Nessuna chiave IA configurata sul server (servono OPENAI_API_KEY, GEMINI_API_KEY o ANTHROPIC_API_KEY)." } });
   }
 
+  let body: any;
   try {
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: "GEMINI_API_KEY non configurata sul server." }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    body = await req.json();
+  } catch {
+    return json({ ok: false, error: { code: "bad_request", message: "Richiesta non valida." } });
+  }
 
-    const body: RequestPayload = await req.json();
-    const {
-      prompt = "",
-      imageBase64,
-      imageMimeType = "image/jpeg",
-      audioBase64,
-      audioMimeType = "audio/webm",
-      existingClients = [],
-      currentDateIso = new Date().toISOString(),
-      timezone = "Europe/Rome",
-      profile,
-      personaInstruction = "",
-      secondBrainContext = "",
-      activeModule = null,
-      temperature = 0.1,
-    } = body;
+  const env = {
+    GEMINI_MODEL: Deno.env.get("GEMINI_MODEL") || "",
+    GEMINI_EMBEDDING_MODEL: Deno.env.get("GEMINI_EMBEDDING_MODEL") || "",
+    ANTHROPIC_MODEL: Deno.env.get("ANTHROPIC_MODEL") || "",
+    OPENAI_MODEL: Deno.env.get("OPENAI_MODEL") || "",
+    OPENAI_TRANSCRIBE_MODEL: Deno.env.get("OPENAI_TRANSCRIBE_MODEL") || "",
+    OPENAI_EMBED_MODEL: Deno.env.get("OPENAI_EMBED_MODEL") || "",
+  };
 
-    const personaBlock = profile && KNOWN_PROFILES.includes(profile) && personaInstruction
-      ? `\n=== PROFILO ATTIVO: ${profile} ===\n${String(personaInstruction).slice(0, 8000)}\n`
-      : "";
-    const brainBlock = secondBrainContext
-      ? `\nContesto Second Brain (Fatti Mem0, Memorie Semantiche e Knowledge Graph):\n${String(secondBrainContext).slice(0, 8000)}\n`
-      : "";
-    const safeTemperature = Math.min(Math.max(Number(temperature) || 0.1, 0), 1);
-
-    const clientsListStr = existingClients.length > 0
-      ? existingClients.map((c) => `- ID: "${c.id}", Nome: "${c.name}"`).join("\n")
-      : "Nessun cliente presente nel database.";
-
-    const systemInstruction = `
-Sei l'assistente operativo per un gestionale professionale. Il tuo compito è estrarre to-do e/o appuntamenti strutturati a partire da messaggi dell'utente (testo, note vocali o immagini/documenti).
-
-Data corrente di riferimento: ${currentDateIso}
-Fuso orario dell'utente: ${timezone}
-
-Modulo attivo nell'app: ${activeModule || "n.d."}
-Clienti attualmente presenti nel gestionale:
-${clientsListStr}
-${brainBlock}
-REGOLE CRUCIALI:
-1. RICONOSCIMENTO MULTIPLO: Se il messaggio contiene più azioni o richieste (es. "Devo attivare un abbonamento per lavorare, fare le foto prodotti per Cliente A e preparare i contenuti per Cliente B"), genera PROPOSTE DISTINTE per ciascuna.
-2. NON INVENTARE CLIENTI: Non trasformare mai il nome di un servizio o di un'azione in un cliente (es. "attivare un abbonamento" non ha cliente, client_id deve essere null o vuoto). Associa a un cliente esistente SOLO se il nome o un chiaro riferimento corrisponde a uno dei clienti in elenco. Se il cliente non esiste o è ambiguo, imposta client_name_proposed con il nome rilevato e client_id = null.
-3. SCADENZE VS APPUNTAMENTI:
-   - Se ha orario preciso o luogo o è un incontro/shooting -> crea un "appointment".
-   - Se è un'attività da completare entro una data o senza orario specifico -> crea un "todo".
-4. INTERPRETAZIONE DATE:
-   - "oggi", "domani", "fra 3 giorni", "prossimo lunedì alle 15" devono essere convertite in ISO 8601 considerando la data corrente e il fuso orario ${timezone}. Se non è indicata una scadenza precisa per un to-do, lascia due_date null.
-5. PREZZI/COMPENSI: Se menzionato un compenso o importo economico, estrailo in 'compensation_amount' (numero puro senza valuta).
-6. FORMATO RISPOSTA: Rispondi ESCLUSIVAMENTE con un JSON valido strutturato come segue:
-{
-  "summary": "Breve riassunto di quanto compreso",
-  "todos": [
-    {
-      "title": "Titolo chiaro e sintetico",
-      "notes": "Dettagli o note estratte",
-      "client_id": "UUID del cliente o null",
-      "client_name_proposed": "Nome cliente se trovato ma senza ID o per disambiguazione",
-      "due_date": "YYYY-MM-DDTHH:mm:ss o null",
-      "priority": "bassa" | "media" | "alta" | "urgente",
-      "compensation_amount": 0.00
-    }
-  ],
-  "appointments": [
-    {
-      "title": "Titolo appuntamento o shooting",
-      "description": "Note o dettagli",
-      "location": "Luogo se presente",
-      "client_id": "UUID del cliente o null",
-      "client_name_proposed": "Nome cliente",
-      "start_time": "YYYY-MM-DDTHH:mm:ss",
-      "end_time": "YYYY-MM-DDTHH:mm:ss o null",
-      "is_all_day": false,
-      "is_shooting": true/false,
-      "shooting_type": "es. Festa, Laurea, Prodotti, Ritratto",
-      "compensation_amount": 0.00
-    }
-  ]
-}
-${EXTENDED_SCHEMA}${personaBlock}`;
-
-    // Costruzione delle parti per Gemini 2.5 Flash / 1.5 Flash
-    const contents: any[] = [];
-    const parts: any[] = [];
-
-    parts.push({ text: `${systemInstruction}\n\nRichiesta utente:\n${prompt}` });
-
-    if (imageBase64) {
-      parts.push({
-        inline_data: {
-          mime_type: imageMimeType,
-          data: imageBase64,
-        },
+  try {
+    if (body.action === "generate") {
+      const parts = Array.isArray(body.parts) ? body.parts : [{ text: String(body.prompt || "") }];
+      const res = await generateStructured({
+        openaiKey, geminiKey, anthropicKey, env, fetchFn: fetch,
+        system: String(body.system || "").slice(0, 120000), parts,
+        maxTokens: Math.min(Math.max(Number(body.maxTokens) || 2048, 256), 8000),
+        budgetMs: Number(body.budgetMs) > 0 ? Math.min(Number(body.budgetMs), 60000) : null,
+        temperature: typeof body.temperature === "number" ? body.temperature : 0.1,
+        json: body.json !== false,
       });
+      return json({ ok: true, data: res.data, model: res.model, provider: res.provider, ms: res.ms, fallbackReason: res.fallbackReason });
     }
 
-    if (audioBase64) {
-      parts.push({
-        inline_data: {
-          mime_type: audioMimeType,
-          data: audioBase64,
-        },
-      });
+    if (body.action === "embed") {
+      // Vettori di ricerca: OpenAI (anche molti testi insieme). Gemini resta solo se la chiave OpenAI non c'è proprio:
+      // vettori di fornitori diversi non sono confrontabili, quindi `source` dice sempre chi li ha calcolati.
+      const texts: string[] = Array.isArray(body.texts) ? body.texts.slice(0, 96).map((t: unknown) => String(t || "")) : [String(body.text || "")];
+      if (openaiKey) {
+        const { vectors, model, tokens } = await openaiEmbed({ apiKey: openaiKey, env, fetchFn: fetch, texts });
+        return json({ ok: true, values: vectors[0], vectors, model, source: "openai", tokens });
+      }
+      if (!geminiKey) return json({ ok: false, error: { code: "no_api_key", message: "I vettori di ricerca richiedono OPENAI_API_KEY (o, in mancanza, GEMINI_API_KEY)." } });
+      const vectors: number[][] = [];
+      let model = "";
+      for (const t of texts) {
+        const r = await embed({ apiKey: geminiKey, env, fetchFn: fetch, text: t.slice(0, 20000) });
+        vectors.push(r.values);
+        model = r.model;
+      }
+      return json({ ok: true, values: vectors[0], vectors, model, source: "gemini", tokens: null });
     }
 
-    contents.push({ role: "user", parts });
-
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-    const geminiRes = await fetch(geminiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents,
-        generationConfig: {
-          temperature: safeTemperature,
-          responseMimeType: "application/json",
-        },
-      }),
-    });
-
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
-      return new Response(
-        JSON.stringify({ error: `Errore Gemini API (${geminiRes.status}): ${errText}` }),
-        { status: geminiRes.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (body.action === "diagnose") {
+      const out: Record<string, unknown> = {};
+      if (openaiKey) {
+        try {
+          const t0 = Date.now();
+          const model = await resolveOpenAIModel(openaiKey, { fetchFn: fetch, env, force: true });
+          const probe = await openaiGenerate({ apiKey: openaiKey, env, fetchFn: fetch, parts: [{ text: 'Rispondi con questo JSON: {"ok":true}' }], timeoutMs: 20000 });
+          out.openai = { ok: true, model, probeOk: probe.data?.ok === true, ms: Date.now() - t0 };
+        } catch (err: any) {
+          out.openai = { ok: false, code: err?.code || "unavailable", message: err?.message };
+        }
+      } else {
+        out.openai = { ok: false, code: "no_api_key", message: "OPENAI_API_KEY non configurata." };
+      }
+      if (geminiKey) {
+        try {
+          out.gemini = { ok: true, ...(await diagnose({ apiKey: geminiKey, env, fetchFn: fetch })) };
+        } catch (err: any) {
+          out.gemini = { ok: false, code: err?.code || "unavailable", message: err?.message };
+        }
+      } else {
+        out.gemini = { ok: false, code: "no_api_key", message: "GEMINI_API_KEY non configurata." };
+      }
+      if (anthropicKey) {
+        try {
+          const t0 = Date.now();
+          const model = await resolveAnthropicModel(anthropicKey, { fetchFn: fetch, env, force: true });
+          const probe = await anthropicGenerate({ apiKey: anthropicKey, env, fetchFn: fetch, parts: [{ text: 'Rispondi con {"ok":true}' }], temperature: 0 });
+          out.anthropic = { ok: true, model, probeOk: probe.data?.ok === true, ms: Date.now() - t0 };
+        } catch (err: any) {
+          out.anthropic = { ok: false, code: err?.code || "unavailable", message: err?.message };
+        }
+      } else {
+        out.anthropic = { ok: false, code: "no_api_key", message: "ANTHROPIC_API_KEY non configurata (riserva assente)." };
+      }
+      return json({ ok: true, ...out });
     }
 
-    const geminiData = await geminiRes.json();
-    const textOutput = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!textOutput) {
-      return new Response(
-        JSON.stringify({ error: "Risposta vuota da Gemini" }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    let parsedResult;
-    try {
-      parsedResult = JSON.parse(textOutput);
-    } catch {
-      // Pulizia markdown backticks se presenti
-      const cleanJson = textOutput.replace(/```json/g, "").replace(/```/g, "").trim();
-      parsedResult = JSON.parse(cleanJson);
-    }
-
-    return new Response(JSON.stringify(parsedResult), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return json({ ok: false, error: { code: "bad_request", message: "Azione sconosciuta." } });
   } catch (err: any) {
-    return new Response(
-      JSON.stringify({ error: err.message || "Errore sconosciuto" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return json({ ok: false, error: { code: err?.code || "unavailable", message: err?.message || "Errore sconosciuto", details: err?.details || null } });
   }
 });

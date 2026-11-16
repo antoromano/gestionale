@@ -59,7 +59,8 @@ export function renderCatalog(container, router) {
               <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
                 <span class="badge badge-gray">${it.category || 'Generale'}</span>
                 <div style="display: flex; gap: 4px;">
-                  <button class="btn btn-sm btn-secondary cat-edit-btn" data-id="${it.id}">✏️</button>
+                  <button class="btn btn-sm btn-secondary cat-edit-btn" data-id="${it.id}" title="Modifica">✏️</button>
+                  <button class="btn btn-sm btn-secondary cat-duplicate-btn" data-id="${it.id}" title="Duplica questa voce">📋</button>
                   <button class="btn btn-sm btn-danger cat-trash-btn" data-id="${it.id}">🗑️</button>
                 </div>
               </div>
@@ -107,6 +108,14 @@ export function renderCatalog(container, router) {
       const id = btn.getAttribute('data-id');
       const item = store.getById('services_catalog', id);
       openCatalogModal(item, container, router);
+    });
+  });
+
+  // Duplica
+  container.querySelectorAll('.cat-duplicate-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      store.duplicateCatalogItem(btn.getAttribute('data-id'));
+      renderCatalog(container, router);
     });
   });
 

@@ -3,6 +3,7 @@
 
 import { store } from '../services/store.js';
 import { formatDate, formatDateTime, formatCurrency } from '../utils/formatters.js';
+import { openTodoModal } from './todos.js';
 
 let currentCalendarMonth = new Date().getMonth();
 let currentCalendarYear = new Date().getFullYear();
@@ -103,9 +104,30 @@ export function renderCalendar(container, router) {
     router.navigate('settings');
   });
 
+  // To-do nella griglia del mese: clic per modificare
+  container.querySelectorAll('.cal-todo-pill').forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const todo = store.getById('todos', pill.getAttribute('data-id'));
+      if (todo) openTodoModal(todo, container, router);
+    });
+  });
+
+  // Agenda: cestino rapido
+  container.querySelectorAll('.cal-agenda-trash-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm('Spostare questo evento nel cestino?')) {
+        store.moveToTrash('appointments', btn.getAttribute('data-id'));
+        renderCalendar(container, router);
+      }
+    });
+  });
+
   // Event click
   container.querySelectorAll('.cal-event-pill').forEach(pill => {
     pill.addEventListener('click', (e) => {
+      if (e.target.closest('.cal-agenda-trash-btn')) return;
       e.stopPropagation();
       const id = pill.getAttribute('data-id');
       const appt = store.getById('appointments', id);
@@ -181,7 +203,7 @@ function renderMonthGrid(year, month, appointments, todos, clients) {
           }).join('')}
 
           ${dayTodos.map(t => `
-            <div style="font-size: 10px; padding: 2px 4px; border-radius: 4px; background: #fef3c7; color: #92400e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            <div class="cal-todo-pill" data-id="${t.id}" title="${t.title} — clicca per modificare" style="font-size: 10px; padding: 2px 4px; border-radius: 4px; background: #fef3c7; color: #92400e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;${t.is_completed ? ' text-decoration: line-through; opacity: .7;' : ''}">
               ✓ ${t.title}
             </div>
           `).join('')}
@@ -256,7 +278,10 @@ function renderAgendaList(appointments, todos, clients) {
                   </div>
                 </div>
 
-                <div style="font-size: 13px; color: var(--accent); font-weight: 600;">Dettagli →</div>
+                <div class="row-actions">
+                  <span style="font-size: 13px; color: var(--accent); font-weight: 600;">Dettagli →</span>
+                  <button type="button" class="btn btn-sm btn-danger cal-agenda-trash-btn" data-id="${a.id}" title="Sposta nel cestino">🗑️</button>
+                </div>
               </div>
             `;
           }).join('')}
@@ -269,7 +294,7 @@ function renderAgendaList(appointments, todos, clients) {
 export function openAppointmentModal(appointment, parentContainer, router) {
   const modalContainer = parentContainer.querySelector('#calendar-modal-container') || document.body;
   const clients = store.getAll('clients');
-  const isEdit = Boolean(appointment);
+  const isEdit = Boolean(appointment?.id); // senza id = nuovo evento precompilato (es. dal cliente)
 
   const now = new Date();
   const defaultStart = appointment?.start_time ? appointment.start_time.slice(0, 16) : now.toISOString().slice(0, 16);
@@ -386,7 +411,8 @@ export function openAppointmentModal(appointment, parentContainer, router) {
     if (confirm('Eliminare questo appuntamento?')) {
       store.moveToTrash('appointments', appointment.id);
       closeModal();
-      renderCalendar(parentContainer, router);
+      if (router?.refresh) router.refresh();
+      else renderCalendar(parentContainer, router);
     }
   });
 
@@ -417,6 +443,7 @@ export function openAppointmentModal(appointment, parentContainer, router) {
     }
 
     closeModal();
-    renderCalendar(parentContainer, router);
+    if (router?.refresh) router.refresh();
+    else renderCalendar(parentContainer, router);
   });
 }

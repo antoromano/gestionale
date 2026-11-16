@@ -5,6 +5,9 @@ import { store } from '../services/store.js';
 import { formatCurrency, formatDate, formatDateTime, formatMonthYear } from '../utils/formatters.js';
 import { calculateQuoteTotals, calculatePaymentBalance } from '../utils/calculations.js';
 import { openTodoModal } from './todos.js';
+import { openAppointmentModal } from './calendar.js';
+import { openQuoteEditorModal, openPdfChoiceModal } from './quotes.js';
+import { openQuoteManagerModal } from './quote-manager.js';
 import { openAiModal } from './ai-assistant.js';
 import { icon } from '../utils/icons.js';
 import { attachSpringTiltCards } from '../utils/three-scenes.js';
@@ -19,6 +22,7 @@ export function renderClients(container, router) {
     return;
   }
 
+  router?.setBack?.(null); // siamo nell'elenco: nessuna sottovista aperta
   const clients = store.getAll('clients');
 
   const filtered = clients.filter(c => {
@@ -69,6 +73,7 @@ export function renderClients(container, router) {
                 </span>
                 <div style="display: flex; gap: 4px;">
                   <button class="btn btn-sm btn-secondary client-quick-edit-btn" data-id="${c.id}" title="Modifica">${icon('edit', 13)}</button>
+                  <button class="btn btn-sm btn-danger client-quick-trash-btn" data-id="${c.id}" title="Sposta nel cestino">🗑️</button>
                 </div>
               </div>
 
@@ -104,7 +109,7 @@ export function renderClients(container, router) {
   // Apri scheda cliente
   container.querySelectorAll('.client-card').forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.client-quick-edit-btn')) return;
+      if (e.target.closest('.client-quick-edit-btn, .client-quick-trash-btn')) return;
       activeClientId = card.getAttribute('data-id');
       renderClients(container, router);
     });
@@ -117,6 +122,20 @@ export function renderClients(container, router) {
       const id = btn.getAttribute('data-id');
       const client = store.getById('clients', id);
       openClientModal(client, container, router);
+    });
+  });
+
+  // Cestino rapido
+  container.querySelectorAll('.client-quick-trash-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute('data-id');
+      const c = store.getById('clients', id);
+      const name = c?.company_name || `${c?.first_name || ''} ${c?.last_name || ''}`.trim() || 'questo cliente';
+      if (confirm(`Spostare ${name} nel cestino? Potrai ripristinarlo dal Cestino.`)) {
+        store.moveToTrash('clients', id);
+        renderClients(container, router);
+      }
     });
   });
 
@@ -340,11 +359,12 @@ function renderClientProfile(container, clientId, router) {
                     ${c.billing_day ? ` • Fatturazione il <span class="mono">${c.billing_day}</span> del mese` : ''}
                   </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 6px;">
-                  <span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-gray'}">
+                <div class="row-actions">
+                  <button type="button" class="badge ${c.status === 'active' ? 'badge-green' : 'badge-gray'} toggle-contract-btn" data-index="${idx}" title="${c.status === 'active' ? 'Clicca per mettere in pausa' : 'Clicca per riattivare'}" style="cursor: pointer; border: none;">
                     ${c.status === 'active' ? 'Attivo' : 'In pausa'}
-                  </span>
-                  <button class="btn btn-sm btn-danger delete-contract-btn" data-index="${idx}" title="Elimina canone" style="padding: 2px 6px;">✕</button>
+                  </button>
+                  <button class="btn btn-sm btn-secondary edit-contract-btn" data-index="${idx}" title="Modifica canone">✏️</button>
+                  <button class="btn btn-sm btn-danger delete-contract-btn" data-index="${idx}" title="Elimina canone">🗑️</button>
                 </div>
               </div>
             `).join('')}
@@ -374,15 +394,20 @@ function renderClientProfile(container, clientId, router) {
             ${group.pending.length > 0 ? `
               <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px;">
                 ${group.pending.map(t => `
-                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 9px 11px; background: #ffffff; border: 1px solid var(--border); border-radius: var(--radius);">
-                    <div style="min-width: 0;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 11px; background: #ffffff; border: 1px solid var(--border); border-radius: var(--radius);">
+                    <input type="checkbox" class="client-todo-check" data-id="${t.id}" title="Segna come fatto" style="width: 17px; height: 17px; flex-shrink: 0; cursor: pointer;" />
+                    <div style="min-width: 0; flex: 1;">
                       <div style="font-weight: 600; font-size: 13px;">${t.title}</div>
                       <div style="font-size: 11px; color: var(--text-muted);">
                         ${t.due_date ? `Scadenza: <span class="mono">${formatDateTime(t.due_date)}</span> • ` : ''}
                         ${t.compensation_amount > 0 ? `Compenso: <span class="mono" style="font-weight:600;color:var(--text-main);">${formatCurrency(t.compensation_amount)}</span>` : ''}
                       </div>
                     </div>
-                    <span class="badge ${t.priority === 'urgente' ? 'badge-red' : 'badge-gray'}">${t.priority}</span>
+                    <div class="row-actions">
+                      <span class="badge ${t.priority === 'urgente' ? 'badge-red' : 'badge-gray'}">${t.priority}</span>
+                      <button class="btn btn-sm btn-secondary client-todo-edit" data-id="${t.id}" title="Modifica">✏️</button>
+                      <button class="btn btn-sm btn-danger client-todo-trash" data-id="${t.id}" title="Sposta nel cestino">🗑️</button>
+                    </div>
                   </div>
                 `).join('')}
               </div>
@@ -392,9 +417,14 @@ function renderClientProfile(container, clientId, router) {
             ${group.completed.length > 0 ? `
               <div style="display: flex; flex-direction: column; gap: 6px;">
                 ${group.completed.map(t => `
-                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 11px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius); opacity: 0.75;">
-                    <div style="font-weight: 500; font-size: 13px; text-decoration: line-through;">${t.title}</div>
-                    <span class="badge badge-green">Fatto</span>
+                  <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 11px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius); opacity: 0.8;">
+                    <input type="checkbox" class="client-todo-check" data-id="${t.id}" checked title="Riapri" style="width: 17px; height: 17px; flex-shrink: 0; cursor: pointer;" />
+                    <div style="font-weight: 500; font-size: 13px; text-decoration: line-through; flex: 1; min-width: 0;">${t.title}</div>
+                    <div class="row-actions">
+                      <span class="badge badge-green">Fatto</span>
+                      <button class="btn btn-sm btn-secondary client-todo-edit" data-id="${t.id}" title="Modifica">✏️</button>
+                      <button class="btn btn-sm btn-danger client-todo-trash" data-id="${t.id}" title="Sposta nel cestino">🗑️</button>
+                    </div>
                   </div>
                 `).join('')}
               </div>
@@ -419,14 +449,18 @@ function renderClientProfile(container, clientId, router) {
           ` : `
             <div style="display: flex; flex-direction: column; gap: 8px;">
               ${quotes.map(q => `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius);">
-                  <div>
-                    <div style="font-weight: 600;"><span class="mono">N. ${q.quote_number}</span> - ${q.title}</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius);">
+                  <div style="min-width: 0;">
+                    <div style="font-weight: 600;"><span class="mono">N. ${q.quote_number}</span> - ${q.title} <span class="badge badge-blue">${q.status}</span></div>
                     <div style="font-size: 11px; color: var(--text-muted);">
                       Data: <span class="mono">${formatDate(q.issue_date)}</span> • Totale: <strong class="mono" style="color:var(--text-main);">${formatCurrency(q.agreed_total || 0)}</strong>
                     </div>
                   </div>
-                  <span class="badge badge-blue">${q.status}</span>
+                  <div class="row-actions">
+                    <button class="btn btn-sm btn-primary client-quote-manage" data-id="${q.id}" title="Pagamenti e lavori del preventivo">💼 Gestisci</button>
+                    <button class="btn btn-sm btn-secondary client-quote-edit" data-id="${q.id}" title="Modifica preventivo">✏️ Modifica</button>
+                    <button class="btn btn-sm btn-secondary client-quote-pdf" data-id="${q.id}" title="Stampa o salva PDF">📄 PDF</button>
+                  </div>
                 </div>
               `).join('')}
             </div>
@@ -437,6 +471,7 @@ function renderClientProfile(container, clientId, router) {
         <div class="card" style="display: ${(activeClientTab === 'all' || activeClientTab === 'events') ? 'block' : 'none'};">
           <div class="card-header">
             <div class="card-title">${icon('calendar', 15)} <span>Appuntamenti, Rilasci & Scadenze (<span class="mono">${appointments.length}</span>)</span></div>
+            <button id="client-add-appt-btn" class="btn btn-sm btn-primary">+ Nuovo Evento</button>
           </div>
 
           ${appointments.length === 0 ? `
@@ -454,7 +489,7 @@ function renderClientProfile(container, clientId, router) {
                 else if (a.is_shooting) badgeHtml = '<span class="badge badge-blue">Shooting</span>';
 
                 return `
-                  <div style="padding: 10px 12px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius);">
+                  <div class="client-appt-row row-click" data-id="${a.id}" title="Clicca per modificare" style="padding: 10px 12px; background: #fafafa; border: 1px solid var(--border); border-radius: var(--radius);">
                     <div style="display: flex; justify-content: space-between;">
                       <div style="font-weight: 600;">${a.title}</div>
                       ${badgeHtml}
@@ -495,31 +530,23 @@ function renderClientProfile(container, clientId, router) {
     openClientModal(client, container, router);
   });
 
-  // Aggiungi Canone di Manutenzione
+  const rerender = () => renderClientProfile(container, clientId, router);
+
+  // Canoni: crea, modifica, sospendi/riattiva, elimina
   container.querySelector('#add-contract-btn')?.addEventListener('click', () => {
-    const title = prompt('Nome del canone (es. SLA Manutenzione & Hosting):', 'Canone Assistenza & Manutenzione');
-    if (!title) return;
-    const amountStr = prompt('Importo periodico in € (es. 300):', '300');
-    const amount = parseFloat(amountStr) || 0;
-    const freqInput = prompt('Frequenza: "mensile", "trimestrale" o "annuale"', 'mensile');
-    let frequency = 'monthly';
-    if (freqInput?.toLowerCase().includes('anno') || freqInput?.toLowerCase().includes('annua')) frequency = 'annual';
-    if (freqInput?.toLowerCase().includes('tri')) frequency = 'quarterly';
-
-    const existingContracts = Array.isArray(client.maintenance_contracts) ? client.maintenance_contracts : [];
-    const newContracts = [...existingContracts, {
-      title,
-      amount,
-      frequency,
-      status: 'active',
-      created_at: new Date().toISOString(),
-    }];
-
-    store.update('clients', clientId, { maintenance_contracts: newContracts });
-    renderClientProfile(container, clientId, router);
+    openContractModal(clientId, null, container, rerender);
   });
-
-  // Elimina Canone
+  container.querySelectorAll('.edit-contract-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      openContractModal(clientId, parseInt(btn.getAttribute('data-index'), 10), container, rerender);
+    });
+  });
+  container.querySelectorAll('.toggle-contract-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      store.toggleClientContract(clientId, parseInt(btn.getAttribute('data-index'), 10));
+      rerender();
+    });
+  });
   container.querySelectorAll('.delete-contract-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.getAttribute('data-index'), 10);
@@ -527,16 +554,71 @@ function renderClientProfile(container, clientId, router) {
         const contracts = [...(client.maintenance_contracts || [])];
         contracts.splice(idx, 1);
         store.update('clients', clientId, { maintenance_contracts: contracts });
-        renderClientProfile(container, clientId, router);
+        rerender();
       }
     });
   });
 
-  // Torna alla lista
-  container.querySelector('#back-to-clients-btn')?.addEventListener('click', () => {
+  // To-do: fatto / riapri, modifica, cestina
+  container.querySelectorAll('.client-todo-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      store.update('todos', cb.getAttribute('data-id'), {
+        is_completed: cb.checked,
+        completed_at: cb.checked ? new Date().toISOString() : null,
+      });
+      rerender();
+    });
+  });
+  container.querySelectorAll('.client-todo-edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const todo = store.getById('todos', btn.getAttribute('data-id'));
+      if (todo) openTodoModal(todo, container, router);
+    });
+  });
+  container.querySelectorAll('.client-todo-trash').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (confirm('Spostare questo to-do nel cestino?')) {
+        store.moveToTrash('todos', btn.getAttribute('data-id'));
+        rerender();
+      }
+    });
+  });
+
+  // Preventivi: gestisci, modifica, PDF
+  container.querySelectorAll('.client-quote-manage').forEach(btn => {
+    btn.addEventListener('click', () => openQuoteManagerModal(btn.getAttribute('data-id'), container, router, rerender));
+  });
+  container.querySelectorAll('.client-quote-edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const details = store.getQuoteWithDetails(btn.getAttribute('data-id'));
+      if (details) openQuoteEditorModal(details, container, router);
+    });
+  });
+  container.querySelectorAll('.client-quote-pdf').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const details = store.getQuoteWithDetails(btn.getAttribute('data-id'));
+      if (details) openPdfChoiceModal(details, container);
+    });
+  });
+
+  // Appuntamenti: clic per modificare, pulsante per crearne uno
+  container.querySelectorAll('.client-appt-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const appt = store.getById('appointments', row.getAttribute('data-id'));
+      if (appt) openAppointmentModal(appt, container, router);
+    });
+  });
+  container.querySelector('#client-add-appt-btn')?.addEventListener('click', () => {
+    openAppointmentModal({ client_id: clientId, title: '' }, container, router);
+  });
+
+  // Torna alla lista (anche dal pulsante "Indietro" in alto)
+  const backToList = () => {
     activeClientId = null;
     renderClients(container, router);
-  });
+  };
+  router?.setBack?.(backToList);
+  container.querySelector('#back-to-clients-btn')?.addEventListener('click', backToList);
 
   // Edit cliente
   container.querySelector('#client-edit-profile-btn')?.addEventListener('click', () => {
@@ -791,6 +873,89 @@ export function openClientModal(client, parentContainer, router) {
 
     closeModal();
     renderClients(parentContainer, router);
+  });
+}
+
+/**
+ * Finestra per creare (index = null) o modificare un canone di manutenzione.
+ */
+function openContractModal(clientId, index, parentContainer, onSaved) {
+  const client = store.getById('clients', clientId);
+  const existing = index !== null ? (client?.maintenance_contracts || [])[index] : null;
+  const isEdit = Boolean(existing);
+  const esc = (v) => String(v ?? '').replace(/"/g, '&quot;');
+
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <div class="modal-overlay" id="contract-modal-overlay">
+      <div class="modal-dialog" style="max-width: 520px;">
+        <div class="modal-header">
+          <div class="modal-title">${isEdit ? 'Modifica Canone' : 'Nuovo Canone'}</div>
+          <button type="button" class="btn btn-sm btn-secondary" id="close-contract-modal">✕</button>
+        </div>
+        <form id="contract-modal-form">
+          <div class="modal-body">
+            <div class="form-group">
+              <label class="form-label">Nome del canone *</label>
+              <input type="text" id="ct-title" class="form-input" required value="${esc(existing?.title || 'Canone Assistenza & Manutenzione')}" />
+            </div>
+            <div class="form-row">
+              <div class="form-group" style="flex: 1;">
+                <label class="form-label">Importo (€) *</label>
+                <input type="number" id="ct-amount" class="form-input" min="0" step="0.01" required value="${existing?.amount ?? 300}" />
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label class="form-label">Ogni quanto</label>
+                <select id="ct-frequency" class="form-select">
+                  <option value="monthly" ${existing?.frequency === 'monthly' || !existing ? 'selected' : ''}>Ogni mese</option>
+                  <option value="quarterly" ${existing?.frequency === 'quarterly' ? 'selected' : ''}>Ogni trimestre</option>
+                  <option value="annual" ${existing?.frequency === 'annual' ? 'selected' : ''}>Ogni anno</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group" style="flex: 1;">
+                <label class="form-label">Giorno di fatturazione (1-31)</label>
+                <input type="number" id="ct-billing-day" class="form-input" min="1" max="31" value="${existing?.billing_day ?? ''}" placeholder="facoltativo" />
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label class="form-label">Stato</label>
+                <select id="ct-status" class="form-select">
+                  <option value="active" ${existing?.status !== 'paused' ? 'selected' : ''}>Attivo</option>
+                  <option value="paused" ${existing?.status === 'paused' ? 'selected' : ''}>In pausa</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Note</label>
+              <textarea id="ct-notes" class="form-textarea" rows="2" placeholder="es. include hosting e 2 ore di assistenza">${existing?.notes || ''}</textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="cancel-contract-modal">Annulla</button>
+            <button type="submit" class="btn btn-primary">${isEdit ? 'Salva Modifiche' : 'Aggiungi Canone'}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  (parentContainer.querySelector('#client-modal-container') || document.body).appendChild(div);
+
+  const close = () => div.remove();
+  div.querySelector('#close-contract-modal').addEventListener('click', close);
+  div.querySelector('#cancel-contract-modal').addEventListener('click', close);
+  div.querySelector('#contract-modal-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    store.saveClientContract(clientId, {
+      title: div.querySelector('#ct-title').value,
+      amount: div.querySelector('#ct-amount').value,
+      frequency: div.querySelector('#ct-frequency').value,
+      billing_day: div.querySelector('#ct-billing-day').value,
+      status: div.querySelector('#ct-status').value,
+      notes: div.querySelector('#ct-notes').value,
+    }, index);
+    close();
+    onSaved?.();
   });
 }
 

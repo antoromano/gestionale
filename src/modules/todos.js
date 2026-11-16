@@ -421,6 +421,8 @@ export function openTodoModal(todo, parentContainer, router, initialClientId = n
     }
 
     closeModal();
-    renderTodos(parentContainer, router);
+    // Il to-do si puo aprire anche da Clienti, Calendario, Oggi: si ridisegna la pagina in cui ci si trova
+    if (router?.refresh) router.refresh();
+    else renderTodos(parentContainer, router);
   });
 }

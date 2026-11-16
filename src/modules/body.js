@@ -2,6 +2,7 @@
 // Sezione "Body": Matrice Diario Intelligente (Ispirata al Quaderno a Colonne), Biometria, Kcal & Macronutrienti,
 // Semaforo Frequenza 2-3 Giorni, Varianti a Parole Complete, Dettagli RPE/Buffer e Integrazione Nativa Second Brain
 
+import { showToast } from '../utils/toast.js';
 import { store } from '../services/store.js';
 import {
   parseWorkoutNotation,
@@ -554,7 +555,7 @@ function renderProgressionsView(columns, workoutEntries, trends) {
           ${[...filteredHistory].reverse().map(sess => {
             const fMeta = FEELING_META[sess.feeling] || FEELING_META.buono;
             return `
-              <div style="padding: 12px 14px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <div class="prog-session-row row-click" data-date="${sess.date}" data-col="${activeCol.id}" title="Clicca per aprire e modificare questa sessione" style="padding: 12px 14px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                 <div>
                   <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                     <span style="font-weight: 800; font-size: 13px; color: var(--text-main);">📅 ${formatShortItalianDate(sess.date)} (${sess.date})</span>
@@ -888,9 +889,14 @@ export function openDailyBioModal(dateStr, parentContainer, router) {
             </div>
           </div>
 
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" id="cancel-bio-modal-btn">Annulla</button>
-            <button type="submit" class="btn btn-primary">✓ Salva Biometria & Macro</button>
+          <div class="modal-footer" style="justify-content: space-between; flex-wrap: wrap;">
+            <div>
+              ${existing ? `<button type="button" class="btn btn-danger" id="delete-bio-log-btn" title="Rimuove peso, sonno e macro di questa data">🗑️ Elimina Log Giornaliero</button>` : ''}
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button type="button" class="btn btn-secondary" id="cancel-bio-modal-btn">Annulla</button>
+              <button type="submit" class="btn btn-primary">✓ Salva Biometria & Macro</button>
+            </div>
           </div>
         </form>
       </div>
@@ -904,6 +910,15 @@ export function openDailyBioModal(dateStr, parentContainer, router) {
   const closeModal = () => div.remove();
   div.querySelector('#close-bio-modal-btn').addEventListener('click', closeModal);
   div.querySelector('#cancel-bio-modal-btn').addEventListener('click', closeModal);
+
+  div.querySelector('#delete-bio-log-btn')?.addEventListener('click', () => {
+    if (!confirm(`Eliminare peso, sonno e macro del ${formatShortItalianDate(dateStr)}?`)) return;
+    const outcome = store.deleteBodyDailyLog(dateStr);
+    closeModal();
+    if (outcome === 'cleared') showToast('Dati del giorno svuotati. Gli allenamenti di quella data restano.', 'info', 5000);
+    else if (outcome === 'deleted') showToast('Log giornaliero eliminato.', 'success');
+    renderBody(parentContainer, router);
+  });
 
   div.querySelector('#body-bio-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -970,14 +985,42 @@ function openManageColumnsModal(parentContainer, router) {
           </form>
 
           <div style="display: flex; flex-direction: column; gap: 8px;">
-            ${columns.map(col => `
-              <div style="padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                  <div style="font-weight: 700; font-size: 13px;">${col.name} <span class="badge badge-gray" style="font-size:10px;">ogni ${col.target_frequency_days || 3}gg</span></div>
-                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-                    Varianti: ${(col.available_variants || []).join(', ')}
+            ${columns.map((col, idx) => `
+              <div class="body-col-row" data-id="${col.id}" style="padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius);">
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                  <div style="min-width: 0;">
+                    <div style="font-weight: 700; font-size: 13px;">${col.name} <span class="badge badge-gray" style="font-size:10px;">ogni ${col.target_frequency_days || 3}gg</span></div>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                      Varianti: ${(col.available_variants || []).join(', ')}
+                    </div>
+                  </div>
+                  <div class="row-actions">
+                    <button type="button" class="btn btn-sm btn-secondary col-move-btn" data-id="${col.id}" data-dir="-1" title="Sposta su" ${idx === 0 ? 'disabled' : ''}>↑</button>
+                    <button type="button" class="btn btn-sm btn-secondary col-move-btn" data-id="${col.id}" data-dir="1" title="Sposta giù" ${idx === columns.length - 1 ? 'disabled' : ''}>↓</button>
+                    <button type="button" class="btn btn-sm btn-secondary col-edit-btn" data-id="${col.id}" title="Modifica nome, frequenza e varianti">✏️</button>
+                    <button type="button" class="btn btn-sm btn-danger col-archive-btn" data-id="${col.id}" title="Archivia: sparisce dalla matrice, lo storico resta">🗑️</button>
                   </div>
                 </div>
+                <form class="col-edit-form" data-id="${col.id}" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);">
+                  <div class="form-row">
+                    <div style="flex: 2;">
+                      <label class="form-label">Nome</label>
+                      <input type="text" class="form-input col-edit-name" required value="${String(col.name || '').replace(/"/g, '&quot;')}" />
+                    </div>
+                    <div style="flex: 1;">
+                      <label class="form-label">Ogni quanti giorni</label>
+                      <input type="number" class="form-input col-edit-freq" min="1" max="60" value="${col.target_frequency_days || 3}" />
+                    </div>
+                  </div>
+                  <div style="margin-top: 8px;">
+                    <label class="form-label">Varianti (separate da virgola)</label>
+                    <input type="text" class="form-input col-edit-variants" value="${(col.available_variants || []).join(', ').replace(/"/g, '&quot;')}" />
+                  </div>
+                  <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;">
+                    <button type="button" class="btn btn-sm btn-secondary col-edit-cancel">Annulla</button>
+                    <button type="submit" class="btn btn-sm btn-primary">Salva</button>
+                  </div>
+                </form>
               </div>
             `).join('')}
           </div>
@@ -997,6 +1040,45 @@ function openManageColumnsModal(parentContainer, router) {
   const closeModal = () => div.remove();
   div.querySelector('#close-cols-modal-btn').addEventListener('click', closeModal);
   div.querySelector('#done-cols-modal-btn').addEventListener('click', closeModal);
+
+  // Dopo ogni modifica si riapre la finestra aggiornata e si ridisegna la matrice sotto
+  const reopen = () => {
+    closeModal();
+    renderBody(parentContainer, router);
+    openManageColumnsModal(parentContainer, router);
+  };
+  div.querySelectorAll('.col-move-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      store.moveBodyColumn(btn.getAttribute('data-id'), parseInt(btn.getAttribute('data-dir'), 10));
+      reopen();
+    });
+  });
+  div.querySelectorAll('.col-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const form = div.querySelector(`.col-edit-form[data-id="${btn.getAttribute('data-id')}"]`);
+      if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    });
+  });
+  div.querySelectorAll('.col-edit-form').forEach(form => {
+    form.querySelector('.col-edit-cancel').addEventListener('click', () => { form.style.display = 'none'; });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      store.updateBodyColumn(form.getAttribute('data-id'), {
+        name: form.querySelector('.col-edit-name').value,
+        target_frequency_days: form.querySelector('.col-edit-freq').value,
+        available_variants: form.querySelector('.col-edit-variants').value,
+      });
+      reopen();
+    });
+  });
+  div.querySelectorAll('.col-archive-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (columns.length <= 1) { alert('Deve restare almeno una colonna esercizio.'); return; }
+      if (!confirm('Archiviare questa colonna? Sparisce dalla matrice; gli allenamenti già registrati non vengono cancellati.')) return;
+      store.archiveBodyColumn(btn.getAttribute('data-id'));
+      reopen();
+    });
+  });
 
   div.querySelector('#add-body-col-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1159,6 +1241,17 @@ function bindBodyEvents(container, router, columns) {
       selectedProgressionColumnId = btn.getAttribute('data-col');
       selectedProgressionVariant = 'all';
       renderBody(container, router);
+    });
+  });
+
+  // Ogni sessione dello storico si apre nella finestra di modifica dell'allenamento
+  container.querySelectorAll('.prog-session-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const dateStr = row.getAttribute('data-date');
+      const col = columns.find(c => c.id === row.getAttribute('data-col'));
+      if (!col || !dateStr) return;
+      const existing = store.getAll('body_workout_entries').find(e => e.date === dateStr && e.column_id === col.id) || null;
+      openWorkoutCellModal(dateStr, col, existing, container, router);
     });
   });
 

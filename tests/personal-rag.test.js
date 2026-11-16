@@ -16,6 +16,11 @@ import {
 import {
   importDocument, deleteDocument, reindexDocument, getDocumentRawContent, getDocumentChunks, searchChunks, createImportRunner,
 } from '../src/services/brain-docs.js';
+import { getAssistantProfile, saveAssistantProfile } from '../src/services/assistant-profile.js';
+import { askPersonalRag, saveRuleFromChat } from '../src/services/personal-rag.js';
+import { askPersonalRagServer } from '../src/services/rag-server.js';
+import { detectDomain, formatAnswerText, todayIn } from '../src/services/rag-core.js';
+import { handleUpdate } from '../supabase/functions/telegram-webhook/handler.js';
 import { createFakeCloud } from './helpers/fake-supabase.js';
 import { stubOpenAI } from './helpers/stub-openai.js';
 
@@ -507,3 +512,234 @@ describe('23. Importazione di chat e documenti (STEP 3)', () => {
     expect(fake.tables.brain_facts).toHaveLength(0);
   });
 });
+
+describe('24. Chat "Chiedi a te stesso" — privacy, regole per argomento, fonti e salva regola (STEP 4)', () => {
+  beforeEach(() => {
+    store.clearAll();
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    cloud.stop();
+    vi.unstubAllGlobals();
+  });
+
+  it('1. interruttori privacy: di partenza le finanze e i clienti sono SPENTI (non arrivano mai all\'IA); Corpo e Agenda sono accesi', async () => {
+    const profile = getAssistantProfile();
+    expect(profile.live_data_permissions).toEqual({
+      body: true,
+      todos_calendar: true,
+      clients: false,
+      finances: false,
+    });
+
+    const today = todayIn(store.getSettings().timezone || 'Europe/Rome');
+    store.upsertBodyDailyLog({ date: today, calories_kcal: 1650, protein_g: 105, body_weight_kg: 74.4 });
+    store.create('todos', { title: 'Consegnare bozza sito', is_completed: false, priority: 'alta' });
+    store.create('clients', { type: 'company', company_name: 'ClienteRiservatoSrl', stack: 'Rust' });
+    store.create('finance_transactions', { date: today, type: 'expense', amount: 9876, description: 'BonificoSegreto', category: 'Altro' });
+
+    const { calls } = stubOpenAI(() => ({
+      answer: 'Ti mancano circa 650 kcal.',
+      used_sources: ['L1', 'L2'],
+      suggested_rule: null,
+    }));
+
+    const resOff = await askPersonalRag({ question: 'Come sono messo oggi?' });
+    expect(resOff.context.live).toEqual(['body', 'todos_calendar']);
+    const sysOff = calls.generate[0].system;
+    expect(sysOff).toContain('1650 kcal');
+    expect(sysOff).toContain('Consegnare bozza sito');
+    expect(sysOff).not.toContain('BonificoSegreto');
+    expect(sysOff).not.toContain('9.876');
+    expect(sysOff).not.toContain('ClienteRiservatoSrl');
+
+    // Accendendo finanze e clienti (e spegnendo body), il prompt cambia di conseguenza
+    saveAssistantProfile({
+      live_data_permissions: { body: false, todos_calendar: true, clients: true, finances: true },
+    });
+    const resOn = await askPersonalRag({ question: 'Qual è la situazione conti e clienti?' });
+    expect(resOn.context.live).toEqual(['todos_calendar', 'clients', 'finances']);
+    const sysOn = calls.generate[1].system;
+    expect(sysOn).not.toContain('1650 kcal');
+    expect(sysOn).toContain('BonificoSegreto');
+    expect(sysOn).toContain('ClienteRiservatoSrl');
+  });
+
+  it('2. regole a strati: istruzioni generali + regole automatiche per l\'argomento della domanda (o forzate a mano)', async () => {
+    expect(detectDomain('Cosa cucino per cena in padella?')).toBe('cucina');
+    expect(detectDomain('Come imposto il preventivo per il cliente?')).toBe('work');
+    expect(detectDomain('Quante serie di trazioni e squat?')).toBe('body');
+    expect(detectDomain('Errore nella query del database Supabase')).toBe('tech');
+
+    saveAssistantProfile({
+      global_instructions: 'Parla sempre in modo ultra sintetico da ingegnere.',
+      domain_rules: {
+        cucina: 'Zero latticini, massimo 15 minuti ai fornelli.',
+        work: 'Chiedi sempre il 30% di acconto.',
+      },
+    });
+
+    const { calls } = stubOpenAI(() => ({ answer: 'Pollo alla piastra.', used_sources: [], suggested_rule: null }));
+
+    const r1 = await askPersonalRag({ question: 'Cosa posso cucinare per cena stasera?' });
+    expect(r1.domain).toBe('cucina');
+    expect(calls.generate[0].system).toContain('Parla sempre in modo ultra sintetico da ingegnere.');
+    expect(calls.generate[0].system).toContain('Zero latticini, massimo 15 minuti ai fornelli.');
+    expect(calls.generate[0].system).not.toContain('Chiedi sempre il 30% di acconto.');
+
+    // Forzando l'ambito a mano ("work"), si applica la regola di lavoro anche su una domanda neutra
+    const r2 = await askPersonalRag({ question: 'Dammi un consiglio.', domain: 'work' });
+    expect(r2.domain).toBe('work');
+    expect(calls.generate[1].system).toContain('Chiedi sempre il 30% di acconto.');
+  });
+
+  it('3. combina le 3 fonti (pezzi di documenti, fatti attivi, dati di oggi), restituisce le fonti citate e permette di salvare una regola in memoria', async () => {
+    const today = todayIn(store.getSettings().timezone || 'Europe/Rome');
+    store.upsertBodyDailyLog({ date: today, calories_kcal: 1500, protein_g: 95 });
+
+    // Importa la chat di cucina
+    stubOpenAI(() => ({
+      summary: 'Ricetta straccetti di pollo',
+      facts: [{ subject: 'Io', fact_key: 'intolleranza', fact_value: 'lattosio', category: 'rule', evidence: 'Sono intollerante al lattosio' }],
+    }));
+    await importDocument(parseChatGptExport(CHATGPT_EXPORT)[0], { domain: 'cucina' });
+
+    // Ora chiediamo al RAG
+    const { calls } = stubOpenAI(() => ({
+      answer: 'Fai gli straccetti di pollo con zucchine e riso basmati: ti restano circa 800 kcal.',
+      used_sources: ['S1', 'F1', 'L1'],
+      suggested_rule: { subject: 'Io', fact_key: 'cena_veloce_preferita', fact_value: 'straccetti di pollo e zucchine', category: 'preference' },
+    }));
+
+    const res = await askPersonalRag({
+      question: 'Cosa cucino stasera per chiudere i macro? Da oggi segna che gli straccetti sono la mia cena veloce preferita.',
+      history: [{ role: 'user', content: 'Ho del pollo in frigo.' }, { role: 'assistant', content: 'Ottimo, vediamo.' }],
+    });
+
+    expect(res.answer).toContain('straccetti di pollo');
+    expect(res.sources.map(s => s.type)).toEqual(['chunk', 'fact', 'live']);
+    expect(res.sources[0].label).toContain('Cucina Veloce');
+    expect(res.sources[1].label).toContain('intolleranza = lattosio');
+    expect(res.sources[2].kind).toBe('body');
+    expect(calls.generate[0].text).toContain('Conversazione finora:');
+    expect(calls.generate[0].text).toContain('Ho del pollo in frigo.');
+
+    // "Salva regola in memoria": la regola proposta diventa un fatto attivo; se aggiornata, la vecchia va nello storico
+    expect(res.suggestedRule).toMatchObject({ fact_key: 'cena_veloce_preferita', fact_value: 'straccetti di pollo e zucchine' });
+    const saved = saveRuleFromChat(res.suggestedRule);
+    expect(saved.action).toBe('created');
+    expect(store.getActiveFacts('Io').find(f => f.fact_key === 'cena_veloce_preferita')?.fact_value).toBe('straccetti di pollo e zucchine');
+
+    const updated = saveRuleFromChat({ subject: 'Io', fact_key: 'cena_veloce_preferita', fact_value: 'salmone e patate', category: 'preference' });
+    expect(updated.action).toBe('superseded');
+    expect(store.getFactHistory('Io', 'cena_veloce_preferita')).toHaveLength(2);
+  });
+
+  it('4. lato server (cloud): non legge nemmeno la tabella delle finanze dal database se l\'interruttore è spento', async () => {
+    const fake = createFakeCloud();
+    const { client, userId } = await signedInClient(fake);
+    await cloud.start(client, userId);
+
+    const today = todayIn('Europe/Rome');
+    store.upsertBodyDailyLog({ date: today, calories_kcal: 1800 });
+    store.create('finance_transactions', { date: today, type: 'expense', amount: 500, description: 'AffittoSegreto', category: 'Casa' });
+    await cloud.flush();
+
+    const { fn } = stubOpenAI(() => ({ answer: 'Hai registrato 1800 kcal.', used_sources: ['L1'], suggested_rule: null }));
+    fake.state.calls.length = 0;
+
+    const out = await askPersonalRagServer({
+      client: fake.browser(),
+      env: { OPENAI_API_KEY: 'sk-test', TIMEZONE: 'Europe/Rome' },
+      fetchFn: fn,
+      question: 'Quante calorie ho segnato oggi?',
+      today,
+    });
+
+    expect(out.answer).toContain('1800 kcal');
+    const queriedTables = fake.state.calls.map(c => c.table);
+    expect(queriedTables).toContain('body_daily_logs');
+    expect(queriedTables).not.toContain('finance_transactions');
+    expect(queriedTables).not.toContain('trading_items');
+    expect(queriedTables).not.toContain('clients');
+  });
+});
+
+describe('25. Comando /ask su Telegram (STEP 5)', () => {
+  const OWNER_TG = 99887766;
+  const baseEnv = { TELEGRAM_BOT_TOKEN: 'TKN', TELEGRAM_ALLOWED_USER_ID: String(OWNER_TG), OPENAI_API_KEY: 'sk-test' };
+  let fake;
+  let owner;
+  let seq = 500;
+
+  const tgMsg = (text) => ({
+    update_id: ++seq,
+    message: {
+      message_id: seq,
+      date: Math.floor(Date.parse('2026-11-16T18:00:00Z') / 1000),
+      chat: { id: OWNER_TG },
+      from: { id: OWNER_TG, username: 'antonio' },
+      text,
+    },
+  });
+
+  beforeEach(async () => {
+    store.clearAll();
+    vi.unstubAllGlobals();
+    fake = createFakeCloud();
+    const { data } = await fake.browser().auth.signUp({ email: 'io@example.com', password: 'segreta123' });
+    owner = data.user.id;
+  });
+
+  afterEach(() => {
+    cloud.stop();
+    vi.unstubAllGlobals();
+  });
+
+  it('1. /ask senza domanda spiega come usarlo; /ask con domanda risponde usando l\'archivio e cita le fonti (escludendo le finanze di default)', async () => {
+    await cloud.start(fake.browser(), owner);
+    upsertFact({ subject: 'Io', fact_key: 'intolleranza', fact_value: 'lattosio', category: 'rule' });
+    store.upsertBodyDailyLog({ date: '2026-11-16', calories_kcal: 1700, protein_g: 110 });
+    store.create('finance_transactions', { date: '2026-11-16', type: 'expense', amount: 1200, description: 'SpesaPrivata', category: 'Altro' });
+    await cloud.flush();
+
+    const tgLog = [];
+    const { fn: openaiFetch, calls } = stubOpenAI(() => ({
+      answer: 'Puoi preparare pollo e zucchine: oggi sei a 1700 kcal e rispetti la regola senza lattosio.',
+      used_sources: ['F1', 'L1'],
+    }));
+    const fetchFn = async (url, init = {}) => {
+      const u = String(url);
+      if (u.includes('api.telegram.org')) {
+        tgLog.push({ method: u.split('/').pop(), ...(init.body ? JSON.parse(init.body) : {}) });
+        return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) };
+      }
+      return openaiFetch(url, init);
+    };
+
+    // 1) /ask vuoto -> messaggio d'aiuto, nessuna chiamata IA
+    await handleUpdate(tgMsg('/ask'), { env: baseEnv, supabase: fake.service(), fetch: fetchFn });
+    expect(tgLog.at(-1).text).toContain('Usa <code>/ask domanda</code>');
+    expect(calls.generate).toHaveLength(0);
+
+    // 2) /ask con domanda (anche se contiene la parola "ieri", "oggi" per il RAG resta la data corrente 2026-11-16)
+    const res = await handleUpdate(tgMsg('/ask Rispetto a ieri, cosa posso mangiare stasera?'), {
+      env: baseEnv,
+      supabase: fake.service(),
+      fetch: fetchFn,
+    });
+    expect(res.body).toMatchObject({ ok: true, intent: 'ask' });
+    expect(calls.generate).toHaveLength(1);
+    expect(calls.generate[0].system).toContain('1700 kcal');
+    expect(calls.generate[0].system).toContain('intolleranza: lattosio');
+    expect(calls.generate[0].system).not.toContain('SpesaPrivata');
+
+    const reply = tgLog.filter(m => m.method === 'sendMessage').at(-1).text;
+    expect(reply).toContain('pollo e zucchine');
+    expect(reply).toContain('Fonti usate:');
+    expect(reply).toContain('intolleranza = lattosio');
+    expect(reply).toContain('Diario corpo di oggi');
+    expect(formatAnswerText({ answer: 'Test', sources: [] })).toContain('nessuna');
+  });
+});
+

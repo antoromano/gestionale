@@ -103,7 +103,14 @@ export function mountBrainChat(root, router) {
             </div>
             ${docs + notes + facts === 0 ? '<div class="muted" style="margin-top: 12px;">L\'archivio è ancora vuoto: importa qualcosa dalla scheda <strong>Fonti</strong> per avere risposte su di te.</div>' : ''}
           </div>` : chat.messages.map(renderMessage).join('')}
-        ${chat.busy ? '<div class="chat-row chat-assistant"><div class="chat-bubble chat-bubble-assistant muted">Cerco nel tuo archivio…</div></div>' : ''}
+        ${chat.busy ? `
+          <div class="chat-row chat-assistant">
+            <div class="chat-bubble chat-bubble-assistant" style="min-width: 240px;">
+              <div class="muted" style="margin-bottom: 8px;">Cerco nel tuo archivio…</div>
+              <div class="skeleton skeleton-line medium"></div>
+              <div class="skeleton skeleton-line short" style="margin-bottom: 0;"></div>
+            </div>
+          </div>` : ''}
       </div>
 
       <form class="chat-form" id="chat-form">

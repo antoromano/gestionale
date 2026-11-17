@@ -148,7 +148,7 @@ function renderMonthGrid(year, month, appointments, todos, clients) {
 
   // Giorni vuoti del mese precedente
   for (let i = 0; i < startingDay; i++) {
-    cellsHtml += `<div style="min-height: 100px; background: #f8fafc; border: 1px solid var(--border); opacity: 0.4;"></div>`;
+    cellsHtml += `<div style="min-height: 100px; background: var(--surface-sidebar); border: 1px solid var(--border-default); opacity: 0.45;"></div>`;
   }
 
   const todayStr = new Date().toISOString().split('T')[0];

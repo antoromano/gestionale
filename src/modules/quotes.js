@@ -37,9 +37,9 @@ export function renderQuotes(container, router, options = {}) {
 
   container.innerHTML = `
     <!-- Barra Superiore Filtri e Azioni -->
-    <div class="card" style="margin-bottom: 20px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-        <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1;">
+    <div class="card" style="margin-bottom: 20px; padding: 14px 18px;">
+      <div class="filter-toolbar">
+        <div class="filter-toolbar-left">
           <input
             type="text"
             id="quotes-search-input"
@@ -79,7 +79,7 @@ export function renderQuotes(container, router, options = {}) {
                 <th>Titolo</th>
                 <th>Cliente / Destinatario</th>
                 <th>Data</th>
-                <th>Totale</th>
+                <th style="text-align: right;">Totale</th>
                 <th>Stato</th>
                 <th>Lavoro</th>
                 <th style="text-align: right;">Azioni</th>
@@ -100,28 +100,28 @@ export function renderQuotes(container, router, options = {}) {
 
                 return `
                   <tr>
-                    <td data-label="Numero" style="font-weight: 700; color: var(--accent);">N. ${q.quote_number}</td>
+                    <td data-label="Numero" class="mono" style="font-weight: 700; color: var(--accent-primary);">N. ${q.quote_number}</td>
                     <td data-label="Titolo" style="font-weight: 600;">${q.title}</td>
                     <td data-label="Destinatario">${recipientText}</td>
-                    <td data-label="Data">${formatDate(q.issue_date)}</td>
-                    <td data-label="Totale" style="font-weight: 700;">${formatCurrency(q.agreed_total || 0)}</td>
+                    <td data-label="Data" class="mono">${formatDate(q.issue_date)}</td>
+                    <td data-label="Totale" class="mono" style="text-align: right; font-weight: 700;">${formatCurrency(q.agreed_total || 0)}</td>
                     <td data-label="Stato"><span class="badge ${statusBadge}">${q.status}</span></td>
                     <td data-label="Lavoro"><span class="badge badge-gray">${q.work_status || 'Da iniziare'}</span></td>
-                    <td data-label="Azioni" style="text-align: right;">
-                      <div style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;">
+                    <td data-label="Azioni" style="text-align: right; white-space: nowrap;">
+                      <div class="row-actions" style="justify-content: flex-end;">
                         <button class="btn btn-sm btn-primary quote-manage-btn" data-id="${q.id}" title="Pannello Gestione Economica">
                           💼 Gestisci
                         </button>
-                        <button class="btn btn-sm btn-secondary quote-edit-btn" data-id="${q.id}" title="Modifica Preventivo">
-                          ✏️ Modifica
+                        <button class="btn btn-sm btn-secondary btn-icon quote-edit-btn" data-id="${q.id}" title="Modifica Preventivo" aria-label="Modifica Preventivo">
+                          ✏️
                         </button>
-                        <button class="btn btn-sm btn-secondary quote-pdf-btn" data-id="${q.id}" title="Stampa o Salva PDF">
-                          📄 PDF
+                        <button class="btn btn-sm btn-secondary btn-icon quote-pdf-btn" data-id="${q.id}" title="Stampa o Salva PDF" aria-label="Stampa o Salva PDF">
+                          📄
                         </button>
-                        <button class="btn btn-sm btn-secondary quote-duplicate-btn" data-id="${q.id}" title="Crea una copia in bozza con un nuovo numero">
-                          📋 Duplica
+                        <button class="btn btn-sm btn-secondary btn-icon quote-duplicate-btn" data-id="${q.id}" title="Duplica Preventivo" aria-label="Duplica Preventivo">
+                          📋
                         </button>
-                        <button class="btn btn-sm btn-danger quote-trash-btn" data-id="${q.id}" title="Cestina">
+                        <button class="btn btn-sm btn-danger btn-icon quote-trash-btn" data-id="${q.id}" title="Sposta nel cestino" aria-label="Sposta nel cestino">
                           🗑️
                         </button>
                       </div>

@@ -36,9 +36,9 @@ export function renderClients(container, router) {
   });
 
   container.innerHTML = `
-    <div class="card" style="margin-bottom: 20px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-        <div style="display: flex; gap: 10px; flex: 1; max-width: 400px;">
+    <div class="card" style="margin-bottom: 20px; padding: 14px 18px;">
+      <div class="filter-toolbar">
+        <div class="filter-toolbar-left" style="max-width: 420px;">
           <input
             type="text"
             id="clients-search-input"
@@ -243,22 +243,22 @@ function renderClientProfile(container, clientId, router) {
       </div>
 
       <!-- Scheda Sintesi Economica Cliente (JetBrains Mono Tabular) -->
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
-        <div class="kpi-card-3d" style="background: #fafafa; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
-          <div style="font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">Totale Concordato</div>
-          <div class="mono" style="font-size: 18px; font-weight: 700; color: var(--text-main); margin-top: 4px;">${formatCurrency(totalAgreed)}</div>
+      <div class="kpi-grid" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-default); margin-bottom: 0;">
+        <div class="kpi-card kpi-card-3d" style="background: var(--surface-sidebar); padding: 12px 14px;">
+          <div class="kpi-label">Totale Concordato</div>
+          <div class="kpi-value" style="font-size: 19px;">${formatCurrency(totalAgreed)}</div>
         </div>
-        <div class="kpi-card-3d" style="background: #fafafa; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
-          <div style="font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">Incassato Effettivo</div>
-          <div class="mono" style="font-size: 18px; font-weight: 700; color: var(--success); margin-top: 4px;">${formatCurrency(totalPaid)}</div>
+        <div class="kpi-card kpi-card-3d" style="background: var(--surface-sidebar); padding: 12px 14px;">
+          <div class="kpi-label">Incassato Effettivo</div>
+          <div class="kpi-value positive" style="font-size: 19px;">${formatCurrency(totalPaid)}</div>
         </div>
-        <div class="kpi-card-3d" style="background: #fafafa; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
-          <div style="font-size: 10.5px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em;">Residuo da Incassare</div>
-          <div class="mono" style="font-size: 18px; font-weight: 700; color: ${residualClient > 0 ? 'var(--danger)' : 'var(--text-muted)'}; margin-top: 4px;">${formatCurrency(residualClient)}</div>
+        <div class="kpi-card kpi-card-3d" style="background: var(--surface-sidebar); padding: 12px 14px;">
+          <div class="kpi-label">Residuo da Incassare</div>
+          <div class="kpi-value ${residualClient > 0 ? 'negative' : ''}" style="font-size: 19px;">${formatCurrency(residualClient)}</div>
         </div>
-        <div class="kpi-card-3d" style="background: #ecfdf5; padding: 12px 14px; border-radius: 8px; border: 1px solid rgba(5, 150, 105, 0.22);">
-          <div style="font-size: 10.5px; text-transform: uppercase; color: #047857; font-weight: 600; letter-spacing: 0.04em;">Canone Ricorrente (MRR)</div>
-          <div class="mono" style="font-size: 18px; font-weight: 700; color: #047857; margin-top: 4px;">${formatCurrency(activeMRR)}/mese</div>
+        <div class="kpi-card kpi-card-3d" style="background: var(--status-success-bg); border-color: var(--status-success-bd); padding: 12px 14px;">
+          <div class="kpi-label" style="color: var(--status-success-fg);">Canone Ricorrente (MRR)</div>
+          <div class="kpi-value" style="font-size: 19px; color: var(--status-success-fg);">${formatCurrency(activeMRR)}/mese</div>
         </div>
       </div>
     </div>

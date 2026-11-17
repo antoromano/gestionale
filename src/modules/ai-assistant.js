@@ -46,15 +46,18 @@ export function openAiModal(options = {}) {
   const preselectedName = preselectedClient ? (preselectedClient.company_name || `${preselectedClient.first_name} ${preselectedClient.last_name}`) : '';
 
   const modalHtml = `
-    <div class="modal-overlay" id="ai-assistant-overlay">
-      <div class="modal-dialog modal-lg" style="max-height: 92vh;">
-        <div class="modal-header ai-modal-header" style="background: #09090b; color: #ffffff; border-bottom: 1px solid #27272a;">
+    <div class="modal-overlay ai-drawer-mode" id="ai-assistant-overlay">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-header ai-modal-header">
           <div class="ai-header-title">
-            <div id="ai-modal-orb-canvas" title="Nucleo Cognitivo 3D Interattivo (Three.js)" style="width: 44px; height: 44px; border-radius: 10px; background: #18181b; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(99,102,241,0.35);"></div>
-            <div>
-              <div class="modal-title" style="color: #ffffff; letter-spacing: -0.02em;">Assistente</div>
-              <div id="ai-modal-subtitle" style="font-size: 11px; color: #a1a1aa;">
-                ${preselectedName ? `Cliente: <strong>${escapeHtml(preselectedName)}</strong>` : 'Scrivi in libertà: capisco da solo se è un impegno, una spesa, un allenamento o un appunto'}
+            <div id="ai-modal-orb-canvas" title="Nucleo Cognitivo 3D Interattivo" style="width: 38px; height: 38px; border-radius: 10px; background: var(--ai-subtle); display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; border: 1px solid var(--ai-border);"></div>
+            <div style="min-width: 0;">
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <div class="modal-title">Assistente AI</div>
+                ${activeModule ? `<span class="ai-context-pill" title="Contesto vista attiva">📍 ${escapeHtml(activeModule)}</span>` : ''}
+              </div>
+              <div id="ai-modal-subtitle">
+                ${preselectedName ? `Cliente: <strong>${escapeHtml(preselectedName)}</strong>` : 'Scrivi in libertà: smisto impegni, spese, allenamenti o appunti'}
               </div>
             </div>
           </div>
@@ -62,10 +65,13 @@ export function openAiModal(options = {}) {
             <button type="button" class="persona-btn" data-persona="constructive" aria-pressed="${!devilsMode}">🤝 Aiuto</button>
             <button type="button" class="persona-btn devil" data-persona="devil" aria-pressed="${devilsMode}">😈 Avvocato del Diavolo</button>
           </div>
-          <button type="button" class="btn btn-sm btn-secondary" id="close-ai-modal-btn" aria-label="Chiudi" style="background: rgba(255,255,255,0.1); color: #fff; border: none;">✕</button>
+          <div class="ai-header-controls">
+            <button type="button" class="btn btn-sm btn-secondary btn-icon" id="ai-toggle-width-btn" title="Espandi / Riduci larghezza pannello" aria-label="Espandi o riduci larghezza">⇄</button>
+            <button type="button" class="btn btn-sm btn-secondary btn-icon" id="close-ai-modal-btn" aria-label="Chiudi">✕</button>
+          </div>
         </div>
 
-        <div class="modal-body" style="padding: 20px; overflow-y: auto;">
+        <div class="modal-body">
           <!-- 1. AREA INPUT RICHIESTA -->
           <div id="ai-input-section">
             <div id="ai-persona-banner"></div>
@@ -81,13 +87,13 @@ export function openAiModal(options = {}) {
             </div>
 
             <!-- Controlli Multimodali (Audio Vocale & Foto) -->
-            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+            <div class="surface-box" style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 14px;">
               <!-- Registratore Vocale -->
               <div style="display: flex; align-items: center; gap: 8px;">
                 <button type="button" id="ai-mic-record-btn" class="btn btn-sm btn-secondary" style="display: flex; align-items: center; gap: 6px;">
                   🎙️ <span id="mic-btn-label">Registra Vocale</span>
                 </button>
-                <span id="mic-timer" style="display: none; font-size: 12px; font-weight: 700; color: var(--danger);">00:00 🔴</span>
+                <span id="mic-timer" class="mono" style="display: none; font-size: 12px; font-weight: 700; color: var(--danger);">00:00 🔴</span>
                 <audio id="audio-preview-player" controls style="display: none; height: 32px;"></audio>
               </div>
 
@@ -97,12 +103,12 @@ export function openAiModal(options = {}) {
                   📷 Allega Foto / Appunto
                   <input type="file" id="ai-photo-input" accept="image/*" style="display: none;" />
                 </label>
-                <div id="photo-preview-name" style="font-size: 11px; color: var(--text-muted); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></div>
+                <div id="photo-preview-name" style="font-size: 11.5px; color: var(--text-tertiary); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></div>
               </div>
             </div>
 
             <details class="ai-options">
-              <summary>Opzioni</summary>
+              <summary>Opzioni Second Brain</summary>
               <div class="ai-options-body">
                 <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
                   <input type="checkbox" id="ai-save-to-brain" checked />
@@ -123,18 +129,28 @@ export function openAiModal(options = {}) {
             </div>
           </div>
 
-          <!-- 2. STATO CARICAMENTO ED ELABORAZIONE -->
-          <div id="ai-loading-section" style="display: none; text-align: center; padding: 40px;">
-            <div style="font-size: 32px; margin-bottom: 12px; animation: pulse 1.5s infinite;">✨</div>
-            <div id="ai-loading-title" style="font-size: 15px; font-weight: 700; color: var(--text-main); margin-bottom: 6px;">Analisi in corso...</div>
-            <div id="ai-loading-detail" style="font-size: 12px; color: var(--text-muted);">Estrazione to-do, appuntamenti e corrispondenze clienti</div>
+          <!-- 2. STATO CARICAMENTO ED ELABORAZIONE (Skeleton Shimmer) -->
+          <div id="ai-loading-section" style="display: none; padding: 24px 8px;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 18px;">
+              <div style="font-size: 24px; animation: pulse 1.4s infinite;">✨</div>
+              <div>
+                <div id="ai-loading-title" style="font-size: 14.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 2px;">Analisi in corso...</div>
+                <div id="ai-loading-detail" style="font-size: 12.5px; color: var(--text-tertiary);">Estrazione to-do, appuntamenti e corrispondenze clienti</div>
+              </div>
+            </div>
+            <div class="surface-box" style="display: flex; flex-direction: column; gap: 10px;">
+              <div class="skeleton skeleton-line medium"></div>
+              <div class="skeleton skeleton-line short"></div>
+              <div class="skeleton skeleton-card"></div>
+              <div class="skeleton skeleton-card"></div>
+            </div>
           </div>
 
           <!-- 3. AREA ANTEPRIMA PROPOSTE & CONFERMA -->
           <div id="ai-results-section" style="display: none;">
-            <div style="padding: 12px; background: #eff6ff; border-left: 4px solid var(--accent); border-radius: var(--radius); margin-bottom: 16px;">
-              <div style="font-weight: 700; font-size: 13px; color: #1e40af;" id="ai-summary-text"></div>
-              <div style="font-size: 11px; color: #3b82f6; margin-top: 2px;">
+            <div class="callout-box callout-info" style="border-left: 4px solid var(--accent-primary); margin-bottom: 16px;">
+              <div style="font-weight: 700; font-size: 13.5px; color: var(--status-info-fg);" id="ai-summary-text"></div>
+              <div style="font-size: 12px; color: var(--accent-primary); margin-top: 2px;">
                 Controlla o modifica le proposte prima di salvare. Nessun record verrà creato senza la tua conferma.
               </div>
             </div>
@@ -147,7 +163,7 @@ export function openAiModal(options = {}) {
             <div id="ai-critique-section" style="display: none;"></div>
 
             <!-- Contesto Second Brain Iniettato -->
-            <div id="ai-brain-context-box" style="display: none; padding: 10px 12px; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: var(--radius); margin-bottom: 16px; font-size: 11px; color: #5b21b6;"></div>
+            <div id="ai-brain-context-box" class="callout-box callout-ai" style="display: none; margin-bottom: 16px; font-size: 12px;"></div>
 
             <!-- Proposte Nuovi Clienti (On-boarding) -->
             <div id="ai-clients-section" style="margin-bottom: 20px; display: none;">
@@ -1124,6 +1140,9 @@ export function openAiModal(options = {}) {
   };
   div.querySelector('#close-ai-modal-btn').addEventListener('click', closeModal);
   div.querySelector('#ai-cancel-btn').addEventListener('click', closeModal);
+  div.querySelector('#ai-toggle-width-btn')?.addEventListener('click', () => {
+    overlay.classList.toggle('ai-drawer-wide');
+  });
 
   // Safe backdrop click
   let mouseDownOnBackdrop = false;

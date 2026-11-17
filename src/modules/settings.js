@@ -56,7 +56,7 @@ export function renderSettings(container, router) {
 
           <!-- Caricamento Logo -->
           <div class="form-row" style="align-items: center; margin-top: 10px;">
-            <div style="width: 80px; height: 80px; border: 2px dashed var(--border); border-radius: var(--radius); display: flex; align-items: center; justify-content: center; background: #f8fafc; overflow: hidden;" id="logo-preview-box">
+            <div style="width: 80px; height: 80px; border: 2px dashed var(--border-strong); border-radius: var(--radius); display: flex; align-items: center; justify-content: center; background: var(--surface-sidebar); overflow: hidden;" id="logo-preview-box">
               ${settings.logo_url ? `<img src="${settings.logo_url}" style="width: 100%; height: 100%; object-fit: contain;" />` : `<span style="font-size: 24px; color: var(--text-muted);">🏢</span>`}
             </div>
             <div style="flex: 1;">

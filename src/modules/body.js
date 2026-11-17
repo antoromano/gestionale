@@ -67,14 +67,14 @@ export function renderBody(container, router) {
     </details>
 
     <!-- 1. DASHBOARD BIOMETRICA SINTETICA + POLIEDRO 3D DI RECUPERO MUSCOLARE -->
-    <div class="grid-4" style="margin-bottom: 16px;">
+    <div class="kpi-grid">
       <!-- Peso Medio 7gg -->
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 5px;">
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">
           ${icon('scale', 13)} <span>Peso Medio 7gg</span>
         </div>
-        <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 4px;">
-          <div class="mono" style="font-size: 24px; font-weight: 700; color: var(--text-main);">
+        <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 6px;">
+          <div class="kpi-value" style="margin-top: 0;">
             ${trends.avgWeight7d !== null ? `${trends.avgWeight7d} kg` : '—'}
           </div>
           ${trends.weightDelta7d !== 0 ? `
@@ -83,33 +83,33 @@ export function renderBody(container, router) {
             </span>
           ` : ''}
         </div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+        <div class="kpi-sub">
           Media mobile anti-oscillazione idrica
         </div>
       </div>
 
       <!-- Media Sonno -->
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 5px;">
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">
           ${icon('moon', 13)} <span>Media Sonno (7gg)</span>
         </div>
-        <div class="mono" style="font-size: 24px; font-weight: 700; color: #6d28d9; margin-top: 4px;">
+        <div class="kpi-value purple">
           ${trends.avgSleep7d !== null ? `${trends.avgSleep7d} h` : '—'}
         </div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+        <div class="kpi-sub">
           ${trends.avgSleep7d && trends.avgSleep7d >= 7.5 ? 'Recupero neurale ottimale' : 'Target consigliato: 7.5 - 8.0 h'}
         </div>
       </div>
 
       <!-- Media Kcal & Macronutrienti -->
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 5px;">
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">
           ${icon('flame', 13)} <span>Media Kcal & Macro (7gg)</span>
         </div>
-        <div class="mono" style="font-size: 22px; font-weight: 700; color: var(--success); margin-top: 4px;">
+        <div class="kpi-value positive">
           ${trends.avgCalories7d !== null ? `${trends.avgCalories7d} kcal` : '—'}
         </div>
-        <div class="mono" style="font-size: 11px; color: var(--text-main); font-weight: 600; margin-top: 3px; display: flex; gap: 5px; flex-wrap: wrap;">
+        <div class="mono" style="font-size: 11px; color: var(--text-primary); font-weight: 600; margin-top: 5px; display: flex; gap: 5px; flex-wrap: wrap;">
           <span class="badge badge-blue" style="font-size: 10px;">P: ${trends.avgProtein7d ?? '—'}g</span>
           <span class="badge badge-yellow" style="font-size: 10px;">C: ${trends.avgCarbs7d ?? '—'}g</span>
           <span class="badge badge-gray" style="font-size: 10px;">G: ${trends.avgFat7d ?? '—'}g</span>
@@ -117,10 +117,10 @@ export function renderBody(container, router) {
       </div>
 
       <!-- Poliedro 3D di Recupero & Esercizi Consigliati Oggi (Finestra 2-3gg) -->
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 12px 14px; display: flex; align-items: center; gap: 12px;">
-        <div id="body-recovery-3d-canvas" title="Poliedro 3D di Recupero Muscolare (Three.js) — Clicca su un satellite per registrare" style="width: 112px; height: 92px; border-radius: 8px; background: #09090b; flex-shrink: 0; overflow: hidden; border: 1px solid #27272a;"></div>
+      <div class="kpi-card kpi-card-3d" style="padding: 12px 14px; flex-direction: row; align-items: center; gap: 12px;">
+        <div id="body-recovery-3d-canvas" title="Poliedro 3D di Recupero Muscolare (Three.js) — Clicca su un satellite per registrare" style="width: 108px; height: 88px; border-radius: 10px; background: #18181b; flex-shrink: 0; overflow: hidden; border: 1px solid var(--border-strong);"></div>
         <div style="min-width: 0; flex: 1;">
-          <div style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
+          <div class="kpi-label" style="display: flex; align-items: center; gap: 4px;">
             ${icon('target', 12)} <span>Target 2-3gg Oggi</span>
           </div>
           <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px;">
@@ -241,16 +241,16 @@ function renderMatrixDiaryView(matrixDates, columns, dailyLogs, workoutEntries, 
 
   return `
     <div class="card" style="padding: 0; overflow: hidden;">
-      <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; background: #f8fafc;">
+      <div style="padding: 14px 18px; border-bottom: 1px solid var(--border-default); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; background: var(--surface-sidebar);">
         <div>
-          <span style="font-weight: 800; font-size: 14px; color: var(--text-main);">📓 Matrice Diario Quotidiano</span>
-          <span style="font-size: 12px; color: var(--text-muted); margin-left: 8px;">
+          <span style="font-weight: 700; font-size: 14.5px; color: var(--text-primary);">📓 Matrice Diario Quotidiano</span>
+          <span style="font-size: 12.5px; color: var(--text-tertiary); margin-left: 8px;">
             Clicca su qualsiasi cella per inserire o modificare serie, varianti a parole complete (es. <em>Presa Larga</em>, <em>Singolo Arto</em>) e note RPE.
           </span>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <label style="font-size: 12px; color: var(--text-muted);">Giorni mostrati:</label>
-          <select id="body-days-window-select" class="form-select" style="width: auto; padding: 4px 10px; font-size: 12px;">
+          <label style="font-size: 12.5px; color: var(--text-tertiary);">Giorni mostrati:</label>
+          <select id="body-days-window-select" class="form-select" style="width: auto; padding: 5px 10px; font-size: 12.5px;">
             <option value="7" ${daysWindowLimit === 7 ? 'selected' : ''}>Ultimi 7 giorni</option>
             <option value="14" ${daysWindowLimit === 14 ? 'selected' : ''}>Ultimi 14 giorni</option>
             <option value="30" ${daysWindowLimit === 30 ? 'selected' : ''}>Ultimi 30 giorni</option>
@@ -262,16 +262,16 @@ function renderMatrixDiaryView(matrixDates, columns, dailyLogs, workoutEntries, 
         <table class="data-table" style="min-width: 1180px; border-collapse: separate; border-spacing: 0;">
           <thead>
             <tr>
-              <th style="position: sticky; top: 0; left: 0; z-index: 20; background: #f4f4f5; min-width: 115px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+              <th style="position: sticky; top: 0; left: 0; z-index: 20; background: var(--surface-subtle); min-width: 115px; border-right: 1px solid var(--border-default); border-bottom: 1px solid var(--border-default);">
                 DATA
               </th>
-              <th style="position: sticky; top: 0; z-index: 15; background: #fafafa; min-width: 78px; text-align: center; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+              <th style="position: sticky; top: 0; z-index: 15; background: var(--surface-sidebar); min-width: 78px; text-align: center; border-right: 1px solid var(--border-default); border-bottom: 1px solid var(--border-default);">
                 SONNO
               </th>
-              <th style="position: sticky; top: 0; z-index: 15; background: #fafafa; min-width: 155px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+              <th style="position: sticky; top: 0; z-index: 15; background: var(--surface-sidebar); min-width: 155px; border-right: 1px solid var(--border-default); border-bottom: 1px solid var(--border-default);">
                 KCAL & MACRO
               </th>
-              <th style="position: sticky; top: 0; z-index: 15; background: #fafafa; min-width: 95px; text-align: center; border-right: 2px solid #d4d4d8; border-bottom: 1px solid var(--border);">
+              <th style="position: sticky; top: 0; z-index: 15; background: var(--surface-sidebar); min-width: 95px; text-align: center; border-right: 2px solid var(--border-strong); border-bottom: 1px solid var(--border-default);">
                 PESO
               </th>
               ${columns.map(col => {

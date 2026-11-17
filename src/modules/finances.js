@@ -167,32 +167,32 @@ function renderOverviewTab({ content, modalHost, rerender }) {
     </div>
 
     <!-- KPI -->
-    <div class="grid-4 fin-kpis" style="margin-bottom: 16px;">
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('download', 13)} <span>Entrate Mese</span></div>
-        <div class="kpi-value" style="font-size: 24px; font-weight: 700; margin-top: 4px; color: var(--success);" id="kpi-income">+${formatCurrency(summary.totalIncome)}</div>
-        <div style="${kpiSubStyle}">${summary.incomeCount} ${summary.incomeCount === 1 ? 'movimento' : 'movimenti'}</div>
+    <div class="kpi-grid fin-kpis">
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('download', 13)} <span>Entrate Mese</span></div>
+        <div class="kpi-value positive" id="kpi-income">+${formatCurrency(summary.totalIncome)}</div>
+        <div class="kpi-sub">${summary.incomeCount} ${summary.incomeCount === 1 ? 'movimento' : 'movimenti'}</div>
       </div>
 
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('upload', 13)} <span>Uscite Mese</span></div>
-        <div class="kpi-value" style="font-size: 24px; font-weight: 700; margin-top: 4px; color: var(--danger);" id="kpi-expense">-${formatCurrency(summary.totalExpenses)}</div>
-        <div style="${kpiSubStyle}">${summary.expenseCount} ${summary.expenseCount === 1 ? 'movimento' : 'movimenti'}</div>
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('upload', 13)} <span>Uscite Mese</span></div>
+        <div class="kpi-value negative" id="kpi-expense">-${formatCurrency(summary.totalExpenses)}</div>
+        <div class="kpi-sub">${summary.expenseCount} ${summary.expenseCount === 1 ? 'movimento' : 'movimenti'}</div>
       </div>
 
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px; border-color: ${net >= 0 ? 'rgba(5,150,105,0.35)' : 'rgba(220,38,38,0.35)'}; box-shadow: 0 0 0 3px ${net >= 0 ? 'rgba(5,150,105,0.07)' : 'rgba(220,38,38,0.07)'};">
-        <div style="${kpiLabelStyle}">${icon('activity', 13)} <span>Cash Flow Netto</span></div>
-        <div class="kpi-value" style="font-size: 26px; font-weight: 700; margin-top: 4px; color: ${netColor};" id="kpi-net">${net > 0 ? '+' : net < 0 ? '-' : ''}${formatCurrency(Math.abs(net))}</div>
-        <div style="${kpiSubStyle}">
+      <div class="kpi-card kpi-card-3d" style="border-color: ${net >= 0 ? 'rgba(21,128,61,0.35)' : 'rgba(185,28,28,0.35)'};">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('activity', 13)} <span>Cash Flow Netto</span></div>
+        <div class="kpi-value" style="color: ${netColor};" id="kpi-net">${net > 0 ? '+' : net < 0 ? '-' : ''}${formatCurrency(Math.abs(net))}</div>
+        <div class="kpi-sub">
           ${net > 0 ? 'Utile del mese' : net < 0 ? 'Perdita del mese' : 'In pareggio'}
           ${summary.recurringPendingExpenses > 0 ? ` · previsto a fine mese ${formatCurrency(summary.projectedNetCashflow)}` : ''}
         </div>
       </div>
 
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('clock', 13)} <span>Costi Fissi Ricorrenti</span></div>
-        <div class="kpi-value" style="font-size: 24px; font-weight: 700; margin-top: 4px;" id="kpi-recurring">${formatCurrency(summary.forecastRecurringExpenses)}</div>
-        <div style="${kpiSubStyle}">
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('clock', 13)} <span>Costi Fissi Ricorrenti</span></div>
+        <div class="kpi-value" id="kpi-recurring">${formatCurrency(summary.forecastRecurringExpenses)}</div>
+        <div class="kpi-sub">
           ${summary.recurringItemsCount} ${summary.recurringItemsCount === 1 ? 'abbonamento/server' : 'abbonamenti/server'}
           ${summary.recurringPendingExpenses > 0 ? ` · ${formatCurrency(summary.recurringPendingExpenses)} ancora da addebitare` : ''}
         </div>
@@ -213,9 +213,9 @@ function renderOverviewTab({ content, modalHost, rerender }) {
       </div>` : ''}
 
     <!-- Filtri e azioni -->
-    <div class="card" style="margin-bottom: 14px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-        <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1; align-items: center;">
+    <div class="card" style="margin-bottom: 14px; padding: 14px 18px;">
+      <div class="filter-toolbar">
+        <div class="filter-toolbar-left">
           <input type="text" id="fin-search" class="form-input" placeholder="Cerca transazione..." value="${escapeHtml(state.txSearch)}" style="max-width: 230px;" />
           <select id="fin-type-filter" class="form-select" style="max-width: 150px;">
             <option value="all" ${state.txType === 'all' ? 'selected' : ''}>Entrate e Uscite</option>
@@ -226,7 +226,7 @@ function renderOverviewTab({ content, modalHost, rerender }) {
             <option value="all">Tutte le categorie</option>
             ${categories.map(c => `<option value="${escapeHtml(c)}" ${state.txCategory === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
           </select>
-          <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer;">
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
             <input type="checkbox" id="fin-all-months" ${state.allMonths ? 'checked' : ''} /> Tutti i mesi
           </label>
         </div>
@@ -339,27 +339,27 @@ function renderTradingTab({ content, modalHost, rerender }) {
     .sort((a, b) => String(b.purchase_date).localeCompare(String(a.purchase_date)));
 
   content.innerHTML = `
-    <div class="grid-3 fin-kpis" style="margin-bottom: 16px;">
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('catalog', 13)} <span>Capitale Attivo in Giacenza</span></div>
-        <div class="kpi-value" style="font-size: 24px; font-weight: 700; margin-top: 4px;" id="kpi-stock">${formatCurrency(stats.activeCapital)}</div>
-        <div style="${kpiSubStyle}">${stats.inStockCount} in vendita${stats.reservedCount ? ` · ${stats.reservedCount} riservati (${formatCurrency(stats.reservedCapital)})` : ''}</div>
+    <div class="kpi-grid fin-kpis">
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('catalog', 13)} <span>Capitale Attivo in Giacenza</span></div>
+        <div class="kpi-value" id="kpi-stock">${formatCurrency(stats.activeCapital)}</div>
+        <div class="kpi-sub">${stats.inStockCount} in vendita${stats.reservedCount ? ` · ${stats.reservedCount} riservati (${formatCurrency(stats.reservedCapital)})` : ''}</div>
       </div>
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('check', 13)} <span>Utile Netto Realizzato</span></div>
-        <div class="kpi-value" style="font-size: 24px; font-weight: 700; margin-top: 4px; color: ${stats.realizedProfit >= 0 ? 'var(--success)' : 'var(--danger)'};" id="kpi-profit">${stats.realizedProfit > 0 ? '+' : ''}${formatCurrency(stats.realizedProfit)}</div>
-        <div style="${kpiSubStyle}">${stats.soldCount} ${stats.soldCount === 1 ? 'articolo venduto' : 'articoli venduti'} · incasso ${formatCurrency(stats.soldRevenue)}</div>
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('check', 13)} <span>Utile Netto Realizzato</span></div>
+        <div class="kpi-value ${stats.realizedProfit >= 0 ? 'positive' : 'negative'}" id="kpi-profit">${stats.realizedProfit > 0 ? '+' : ''}${formatCurrency(stats.realizedProfit)}</div>
+        <div class="kpi-sub">${stats.soldCount} ${stats.soldCount === 1 ? 'articolo venduto' : 'articoli venduti'} · incasso ${formatCurrency(stats.soldRevenue)}</div>
       </div>
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('target', 13)} <span>ROI Medio</span></div>
-        <div class="kpi-value" style="font-size: 24px; font-weight: 700; margin-top: 4px;" id="kpi-roi">${stats.avgRoiPercent}%</div>
-        <div style="${kpiSubStyle}">Utile netto / (acquisto + extra), media sui venduti</div>
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('target', 13)} <span>ROI Medio</span></div>
+        <div class="kpi-value" id="kpi-roi">${stats.avgRoiPercent}%</div>
+        <div class="kpi-sub">Utile netto / (acquisto + extra), media sui venduti</div>
       </div>
     </div>
 
-    <div class="card" style="margin-bottom: 14px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-        <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1;">
+    <div class="card" style="margin-bottom: 14px; padding: 14px 18px;">
+      <div class="filter-toolbar">
+        <div class="filter-toolbar-left">
           <input type="text" id="trade-search" class="form-input" placeholder="Cerca articolo..." value="${escapeHtml(state.tradeSearch)}" style="max-width: 230px;" />
           <select id="trade-status-filter" class="form-select" style="max-width: 180px;">
             <option value="all">Tutti gli stati</option>
@@ -458,21 +458,21 @@ function renderRecurringTab({ content, modalHost, rerender }) {
   const monthlyFixed = activeExpenses.reduce((s, p) => s + monthlyEquivalent(p), 0);
 
   content.innerHTML = `
-    <div class="grid-3 fin-kpis" style="margin-bottom: 16px;">
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('clock', 13)} <span>Costo Fisso Mensile</span></div>
-        <div class="kpi-value" style="font-size: 24px; font-weight: 700; margin-top: 4px; color: var(--danger);">${formatCurrency(monthlyFixed)}</div>
-        <div style="${kpiSubStyle}">Equivalente mensile di ${activeExpenses.length} ${activeExpenses.length === 1 ? 'uscita attiva' : 'uscite attive'}</div>
+    <div class="kpi-grid fin-kpis">
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('clock', 13)} <span>Costo Fisso Mensile</span></div>
+        <div class="kpi-value negative">${formatCurrency(monthlyFixed)}</div>
+        <div class="kpi-sub">Equivalente mensile di ${activeExpenses.length} ${activeExpenses.length === 1 ? 'uscita attiva' : 'uscite attive'}</div>
       </div>
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('calendar', 13)} <span>Proiezione Annua</span></div>
-        <div class="kpi-value" style="font-size: 24px; font-weight: 700; margin-top: 4px;">${formatCurrency(monthlyFixed * 12)}</div>
-        <div style="${kpiSubStyle}">Quanto ti costano in un anno server, licenze e abbonamenti</div>
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('calendar', 13)} <span>Proiezione Annua</span></div>
+        <div class="kpi-value">${formatCurrency(monthlyFixed * 12)}</div>
+        <div class="kpi-sub">Quanto ti costano in un anno server, licenze e abbonamenti</div>
       </div>
-      <div class="card kpi-card-3d" style="margin-bottom: 0; padding: 15px 16px;">
-        <div style="${kpiLabelStyle}">${icon('info', 13)} <span>Generazione automatica</span></div>
-        <div style="font-size: 13px; font-weight: 600; margin-top: 6px;">Idempotente</div>
-        <div style="${kpiSubStyle}">Le scadenze maturate vengono create una sola volta, anche riaprendo la pagina.</div>
+      <div class="kpi-card kpi-card-3d">
+        <div class="kpi-label" style="display: flex; align-items: center; gap: 5px;">${icon('info', 13)} <span>Generazione automatica</span></div>
+        <div style="font-size: 14px; font-weight: 650; margin-top: 6px; color: var(--text-primary);">Idempotente</div>
+        <div class="kpi-sub">Le scadenze maturate vengono create una sola volta, anche riaprendo la pagina.</div>
       </div>
     </div>
 
@@ -633,7 +633,7 @@ function openTransactionModal({ tx = null, defaults = {}, modalHost, rerender })
               </select>
             </div>
 
-            <div style="margin-top: 6px; padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+            <div class="surface-box" style="margin-top: 6px;">
               <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
                 <input type="checkbox" id="tx-recurring" ${recurring ? 'checked' : ''} /> ${icon('clock', 14)} Rendi ricorrente (generazione automatica)
               </label>

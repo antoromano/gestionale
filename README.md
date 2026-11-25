@@ -111,7 +111,8 @@ Gestionale1/
 │   │   ├── 002_storage_buckets.sql   # Bucket e policy sicurezza storage
 │   │   └── 006_finances_and_queue.sql # finance_transactions, trading_items, ai_note_queue (+ copia idempotente di expenses)
 │   └── functions/
-│       ├── gemini-assistant/index.ts      # Edge Function Gemini Multimodal
+│       ├── gemini-assistant/index.ts      # Edge Function IA (generate/embed/diagnose)
+│       ├── personal-rag-chat/index.ts     # Edge Function chat personale "Chiedi a te stesso"
 │       ├── google-calendar-sync/index.ts  # Edge Function 2-Way Google Calendar
 │       └── notion-sync/index.ts           # Edge Function Notion To-do
 └── tests/
@@ -159,8 +160,16 @@ Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header del
 - **Second Brain**: prima mostra "Cosa ho capito" e salva solo dopo la tua conferma.
 - **Inbox unico** in alto: scrivi qualsiasi cosa e Invio; "Da parte" mette la nota in coda per elaborarla in blocco con una sola richiesta IA.
 
+### Chiedi a te stesso (archivio personale)
+Nel **Second Brain** la scheda **Chiedi** è una chat che risponde usando solo quello che sa di te, e sotto ogni risposta mostra le **fonti** (clic per leggere il testo d'origine). Tre fonti insieme: i pezzi di documenti e vecchie chat (ricerca per significato + parole esatte), i fatti salvati e i dati di oggi del gestionale.
+- **Fonti**: importa `conversations.json` di ChatGPT o Claude, l'attività Gemini di Google Takeout, PDF, `.md`, `.txt` o testo incollato. Scegli tu cosa importare, vedi il costo stimato, un elemento alla volta con pausa/ripresa. Il testo originale ripulito si conserva; i fatti si ricavano **solo dai tuoi messaggi** (ogni fatto deve citare una tua frase) e hanno la **data della chat**: un'informazione vecchia non scavalca una più recente, va nello storico.
+- **Istruzioni e privacy**: regole generali + regole per argomento (cucina, lavoro, corpo, tecnica, personale) e interruttori sui dati vivi del gestionale. **Entrate e uscite e Clienti sono spenti di default.**
+- **Telegram**: `/ask domanda` usa lo stesso motore (stesse istruzioni, fonti e interruttori).
+- Pezzi e testo originale stanno solo nel database (cercati sul server); nel browser resta la scheda del documento. Vettori di ricerca: OpenAI `text-embedding-3-small` a 768 numeri. Dopo il cambio di fornitore: Impostazioni → Avanzate → *Ricalcola la ricerca per significato*.
+- Funzione server: `personal-rag-chat` (richiede login, legge con i permessi dell'utente). Migrazione `010_personal_rag.sql`.
+
 ### Segreti da impostare su Supabase (Edge Functions → Secrets)
-`OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` (ne basta una, meglio due: la seconda fa da riserva), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`. Opzionali: `OPENAI_MODEL`, `GEMINI_MODEL`, `ANTHROPIC_MODEL` (per forzare un modello). Mai nel codice o in chat.
+`OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` (ne basta una, meglio due: la seconda fa da riserva), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`. Opzionali: `OPENAI_MODEL`, `OPENAI_EMBED_MODEL`, `GEMINI_MODEL`, `ANTHROPIC_MODEL` (per forzare un modello). Mai nel codice o in chat.
 
 ### Edge Functions: codice condiviso
 `src/services/gemini-core.js` è la copia canonica; `node scripts/sync-edge-shared.mjs` la copia nelle funzioni. Un test verifica che non ci siano differenze.
@@ -184,12 +193,13 @@ Supabase Free + Vercel Hobby bastano (uso personale). Attenzione: Supabase Free 
 2. Copia ed esegui il file `supabase/migrations/002_storage_buckets.sql` per configurare i bucket:
    - `quote-attachments`: Privato, max 5 MB, supporta JPEG, PNG, WebP. Accesso concesso solo all'utente proprietario.
    - `business-assets`: Per loghi aziendali.
-3. Esegui in ordine le migration successive (`003`…`009`; `007` e `008` introducono sincronizzazione, blocco a utente unico e realtime). La `006_finances_and_queue.sql` crea `finance_transactions`, `trading_items` (con `net_profit` e `roi_percent` come colonne generate) e `ai_note_queue`, tutte con RLS.
+3. Esegui in ordine le migration successive (`003`…`010`; `007` e `008` introducono sincronizzazione, blocco a utente unico e realtime). La `006_finances_and_queue.sql` crea `finance_transactions`, `trading_items` (con `net_profit` e `roi_percent` come colonne generate) e `ai_note_queue`, tutte con RLS.
 
 ### 3. Distribuzione Edge Functions
 Assicurati di avere la CLI di Supabase installata (`supabase login`):
 ```bash
 supabase functions deploy gemini-assistant --project-ref TUO_PROJECT_REF
+supabase functions deploy personal-rag-chat --project-ref TUO_PROJECT_REF
 supabase functions deploy google-calendar-sync --project-ref TUO_PROJECT_REF
 supabase functions deploy notion-sync --project-ref TUO_PROJECT_REF
 ```

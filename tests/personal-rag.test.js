@@ -507,3 +507,259 @@ describe('23. Importazione di chat e documenti (STEP 3)', () => {
     expect(fake.tables.brain_facts).toHaveLength(0);
   });
 });
+
+import { askRag, buildLiveSections, normalizeProfile, detectDomain, selectRelevantFacts, formatAnswerText, todayIn } from '../src/services/rag-core.js';
+import { askPersonalRag, saveRuleFromChat } from '../src/services/personal-rag.js';
+import { saveAssistantProfile, getAssistantProfile } from '../src/services/assistant-profile.js';
+import { handleUpdate, parseCommand, splitForTelegram } from '../supabase/functions/telegram-webhook/handler.js';
+import { askPersonalRagServer } from '../src/services/rag-server.js';
+
+const TODAY = todayIn('Europe/Rome'); // la chat in locale usa la data di oggi: i dati di prova devono essere di oggi
+
+/** Archivio di prova: un documento con due pezzi, qualche fatto, e dati vivi (corpo, agenda, clienti, soldi). */
+function seedArchive({ withDocs = true } = {}) {
+  if (withDocs) {
+    store.create('brain_documents', { id: 'doc-cucina', title: 'Chat Cucina Veloce', source_provider: 'chatgpt', domain: 'cucina', original_date: '2025-11-03T10:00:00.000Z', chunk_count: 2, facts_extracted_count: 0 });
+    store.create('brain_memories', { id: 'm-1', document_id: 'doc-cucina', chunk_index: 0, title: 'Chat Cucina Veloce', content: 'Straccetti di pollo con zucchine e riso basmati: 150 g di pollo, 70 g di riso. Pronti in 16 minuti.', domain: 'cucina', source_type: 'document', source_date: '2025-11-03T10:00:00.000Z', embedding: computeLocalEmbedding('Straccetti di pollo con zucchine e riso basmati'), embedding_source: 'local' });
+    store.create('brain_memories', { id: 'm-2', document_id: 'doc-cucina', chunk_index: 1, title: 'Chat Cucina Veloce', content: 'Merluzzo al forno con patate, 35 minuti.', domain: 'cucina', source_type: 'document', source_date: '2025-11-03T10:00:00.000Z', embedding: computeLocalEmbedding('Merluzzo al forno con patate'), embedding_source: 'local' });
+  }
+  upsertFact({ subject: 'Io', fact_key: 'latticini', fact_value: 'intollerante al lattosio', category: 'rule' });
+  upsertFact({ subject: 'TechCorp', fact_key: 'stack', fact_value: 'Next.js', category: 'client_info' });
+  store.create('body_daily_logs', { date: TODAY, calories_kcal: 1650, protein_g: 95 });
+  store.create('todos', { title: 'Richiamare Marco', due_date: `${TODAY}T10:00`, is_completed: false, priority: 'alta' });
+  store.create('clients', { type: 'company', company_name: 'TechCorp Srl', stack: 'Next.js', notes: 'cliente storico' });
+  store.create('finance_transactions', { type: 'expense', amount: 777.77, description: 'Spesa segretissima', date: `${TODAY}`, category: 'Altro' });
+}
+
+describe('24. Chat "Chiedi a te stesso" (STEP 4)', () => {
+  beforeEach(() => { store.clearAll(); vi.unstubAllGlobals(); });
+  afterEach(() => { cloud.stop(); vi.unstubAllGlobals(); });
+
+  it('1. PRIVACY: con finanze spente (predefinito) i movimenti non arrivano mai all\'IA; con l\'interruttore acceso sì', () => {
+    seedArchive();
+    const raw = { transactions: store.getAll('finance_transactions'), clients: store.getAll('clients'), dailyLogs: store.getAll('body_daily_logs') };
+    const defaults = normalizeProfile(null).live_data_permissions;
+    expect(defaults).toEqual({ body: true, todos_calendar: true, clients: false, finances: false });
+
+    const off = buildLiveSections(raw, defaults, { today: TODAY });
+    expect(off.map(s => s.kind)).toEqual(['body', 'todos_calendar']);
+    expect(JSON.stringify(off)).not.toContain('segretissima');
+    expect(JSON.stringify(off)).not.toContain('TechCorp');
+
+    const on = buildLiveSections(raw, { ...defaults, finances: true, clients: true }, { today: TODAY });
+    expect(on.map(s => s.kind)).toEqual(['body', 'todos_calendar', 'clients', 'finances']);
+    expect(JSON.stringify(on)).toContain('segretissima');
+    expect(on.find(s => s.kind === 'body').text).toContain('1650 kcal');
+    // un valore non booleano non accende nulla
+    expect(normalizeProfile({ live_data_permissions: { finances: 'true' } }).live_data_permissions.finances).toBe(false);
+  });
+
+  it('2. istruzioni a strati: regole generali sempre, regole dell\'ambito solo quando la domanda lo riguarda', async () => {
+    seedArchive();
+    saveAssistantProfile({ global_instructions: 'Sono Antonio. Risposte secche.', domain_rules: { cucina: 'Porzioni per 1 persona.', work: 'Valuta il rischio cliente unico.' } });
+    expect(getAssistantProfile().global_instructions).toBe('Sono Antonio. Risposte secche.');
+    const { calls } = stubOpenAI(() => ({ answer: 'Straccetti di pollo.', used_sources: ['S1'], suggested_rule: null }));
+
+    const res = await askPersonalRag({ question: 'Cosa posso cucinare stasera con il pollo?' });
+    const system = calls.generate[0].system;
+    expect(res.domain).toBe('cucina');
+    expect(system).toContain('Sono Antonio. Risposte secche.');
+    expect(system).toContain('Porzioni per 1 persona.');
+    expect(system).not.toContain('Valuta il rischio cliente unico.');
+
+    await askPersonalRag({ question: 'Come negozio la tariffa con il cliente?' });
+    expect(calls.generate[1].system).toContain('Valuta il rischio cliente unico.');
+    expect(calls.generate[1].system).not.toContain('Porzioni per 1 persona.');
+    expect(detectDomain('ciao come stai')).toBe('personal');
+  });
+
+  it('3. le tre fonti arrivano insieme e le fonti citate sono quelle davvero usate, con etichetta leggibile', async () => {
+    seedArchive();
+    const { calls } = stubOpenAI(() => ({ answer: 'Fai gli straccetti: hai 1650 kcal, te ne mancano circa 750. Niente latticini.', used_sources: ['S1', 'F1', 'L1', 'S9'], suggested_rule: null }));
+    const res = await askPersonalRag({ question: 'Cosa cucino con il pollo per chiudere i macro di oggi?' });
+
+    const system = calls.generate[0].system;
+    expect(system).toContain('Straccetti di pollo con zucchine');     // fonte 1: pezzo del documento
+    expect(system).toContain('intollerante al lattosio');              // fonte 2: fatto
+    expect(system).toContain('1650 kcal');                             // fonte 3: dati vivi
+    expect(system).not.toContain('segretissima');
+
+    expect(res.sources.map(s => s.id)).toEqual(['S1', 'F1', 'L1']);    // S9 non esiste: scartata
+    const labels = res.sources.map(s => s.label);
+    expect(labels[0]).toBe('📄 Chat Cucina Veloce (2025-11) • pezzo #1');
+    expect(labels[1]).toMatch(/^📌 Fatto: latticini = intollerante al lattosio/);
+    expect(labels[2]).toMatch(/Diario corpo/);
+    expect(res.sources[0]).toMatchObject({ type: 'chunk', document_id: 'doc-cucina', chunk_index: 0 });
+    expect(formatAnswerText(res)).toContain('Fonti usate:\n• 📄 Chat Cucina Veloce');
+  });
+
+  it('4. una domanda di seguito ("e con il riso?") ricorda la precedente; senza fonti la risposta lo dice', async () => {
+    seedArchive();
+    const { calls } = stubOpenAI(() => ({ answer: 'Non ho dati su questo.', used_sources: [] }));
+    await askPersonalRag({ question: 'Che cena veloce con pollo e zucchine?' });
+    await askPersonalRag({ question: 'e con il riso?', history: [{ role: 'user', content: 'Che cena veloce con pollo e zucchine?' }, { role: 'assistant', content: 'Straccetti.' }] });
+    expect(calls.generate[1].text).toContain('Conversazione finora:');
+    expect(calls.generate[1].text).toContain('Straccetti.');
+    expect(calls.generate[1].system).toContain('Straccetti di pollo'); // la ricerca ha usato anche la domanda precedente
+    const res = await askPersonalRag({ question: 'Qualcosa?' });
+    expect(res.sources).toEqual([]);
+    expect(formatAnswerText(res)).toContain('Fonti usate: nessuna');
+  });
+
+  it('5. se i vettori non sono disponibili la ricerca continua per parole esatte; se l\'IA non risponde l\'errore è chiaro', async () => {
+    seedArchive();
+    stubOpenAI(() => ({ answer: 'ok', used_sources: ['S1'] }), { embedFail: true });
+    const res = await askPersonalRag({ question: 'merluzzo' });
+    // l'app ripiega sui vettori locali dichiarandolo (source 'local'): la ricerca per parole esatte funziona comunque
+    expect(res.context.embeddingSource).toBe('local');
+    expect(res.context.chunks).toBeGreaterThan(0);
+
+    stubOpenAI(() => ({}), { generateFail: 500 });
+    await expect(askPersonalRag({ question: 'ciao' })).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(askPersonalRag({ question: '   ' })).rejects.toThrow(/Scrivi una domanda/);
+  });
+
+  it('6. VOLANO: "Salva regola in memoria" crea un fatto attivo che compare nelle risposte successive; una regola nuova mette la vecchia nello storico', async () => {
+    const { calls } = stubOpenAI(() => ({ answer: 'ok', used_sources: [], suggested_rule: { subject: 'Io', fact_key: 'latticini_a_pranzo', fact_value: 'niente latticini a pranzo', category: 'rule' } }));
+    const first = await askPersonalRag({ question: 'Da questa settimana tolgo i latticini a pranzo' });
+    expect(first.suggestedRule).toMatchObject({ fact_key: 'latticini_a_pranzo', category: 'rule' });
+
+    const saved = saveRuleFromChat(first.suggestedRule);
+    expect(saved.action).toBe('created');
+    await askPersonalRag({ question: 'Cosa mangio a pranzo?' });
+    expect(calls.generate[1].system).toContain('niente latticini a pranzo');
+
+    const changed = saveRuleFromChat({ subject: 'Io', fact_key: 'latticini_a_pranzo', fact_value: 'latticini ammessi solo a colazione' });
+    expect(changed.action).toBe('superseded');
+    expect(store.getFactHistory('Io', 'latticini_a_pranzo')).toHaveLength(2);
+    expect(() => saveRuleFromChat({ fact_key: '', fact_value: '' })).toThrow();
+  });
+
+  it('7. regole e preferenze valgono sempre; gli altri fatti entrano solo se c\'entrano con la domanda', () => {
+    upsertFact({ subject: 'Io', fact_key: 'regola_sveglia', fact_value: 'alle 6', category: 'rule' });
+    upsertFact({ subject: 'TechCorp', fact_key: 'stack', fact_value: 'Next.js', category: 'client_info' });
+    upsertFact({ subject: 'Zeta', fact_key: 'colore', fact_value: 'blu', category: 'status' });
+    const picked = selectRelevantFacts(store.getActiveFacts(), 'Che stack usa TechCorp?').map(f => f.fact_key);
+    expect(picked).toContain('regola_sveglia');
+    expect(picked).toContain('stack');
+    expect(picked).not.toContain('colore');
+    expect(todayIn('Europe/Rome', new Date('2026-11-14T23:30:00Z'))).toBe('2026-11-15'); // dopo mezzanotte a Roma è già il giorno dopo
+  });
+
+  it('8. con il cloud: la chat sul server legge SOLO i dati di chi chiede, rispetta gli interruttori e cerca nel database', async () => {
+    const fake = createFakeCloud();
+    const { client, userId } = await signedInClient(fake);
+    await cloud.start(client, userId);
+    seedArchive({ withDocs: false });
+    const DOC = '00000000-0000-4000-8000-0000000000e1';
+    fake.tables.brain_documents.push({ id: DOC, user_id: userId, title: 'Chat Cucina Veloce', source_provider: 'chatgpt', domain: 'cucina', original_date: '2025-11-03T10:00:00.000Z', chunk_count: 1, facts_extracted_count: 0, is_deleted: false, extra: {} });
+    fake.tables.brain_memories.push({ id: '00000000-0000-4000-8000-0000000000e2', user_id: userId, document_id: DOC, chunk_index: 0, title: 'Chat Cucina Veloce', content: 'Straccetti di pollo con zucchine e riso basmati: 16 minuti.', domain: 'cucina', source_type: 'document', is_deleted: false, embedding_source: 'openai', embedding: JSON.stringify(computeLocalEmbedding('Straccetti di pollo con zucchine e riso basmati')), extra: {} });
+    store.create('brain_assistant_profiles', { global_instructions: 'Dritto al punto.', domain_rules: {}, live_data_permissions: { body: true, todos_calendar: false, clients: false, finances: false } });
+    await cloud.flush();
+    // dati di un altro utente: non devono comparire mai
+    fake.tables.brain_facts.push({ id: '00000000-0000-4000-8000-0000000000f1', user_id: 'altro-utente', subject: 'Altro', fact_key: 'segreto', fact_value: 'DATO-ALTRUI', category: 'rule', is_active: true, extra: {} });
+    fake.tables.brain_memories.push({ id: '00000000-0000-4000-8000-0000000000f2', user_id: 'altro-utente', title: 'x', content: 'straccetti di pollo DATO-ALTRUI', domain: 'cucina', source_type: 'manual', is_deleted: false, embedding_source: 'openai', extra: {} });
+
+    const { calls } = stubOpenAI(() => ({ answer: 'Ok', used_sources: ['S1', 'L1'] }));
+    const env = { OPENAI_API_KEY: 'sk-test' };
+    const res = await askPersonalRagServer({ client: fake.service(), userId, env, fetchFn: fetch, question: 'Cosa cucino con il pollo?', today: TODAY });
+
+    const system = calls.generate[0].system;
+    expect(system).toContain('Dritto al punto.');
+    expect(system).toContain('Straccetti di pollo');
+    expect(system).toContain('1650 kcal');                  // corpo: acceso
+    expect(system).not.toContain('Richiamare Marco');       // agenda: spenta
+    expect(system).not.toContain('segretissima');           // finanze: spente
+    expect(system).not.toContain('DATO-ALTRUI');            // niente dati di altri utenti
+    expect(res.sources.map(s => s.id)).toEqual(['S1', 'L1']);
+    expect(res.context.embeddingSource).toBe('openai');
+  });
+});
+
+describe('25. Telegram /ask (STEP 5)', () => {
+  const OWNER_TG = 4242;
+  let fake;
+  let owner;
+  beforeEach(async () => {
+    store.clearAll();
+    vi.unstubAllGlobals();
+    fake = createFakeCloud();
+    const { data } = await fake.browser().auth.signUp({ email: 'io@example.com', password: 'segreta123' });
+    owner = data.user.id;
+  });
+  afterEach(() => { cloud.stop(); vi.unstubAllGlobals(); });
+
+  const msg = (text) => ({ update_id: Math.floor(Math.random() * 1e9), message: { message_id: 1, date: Math.floor(Date.parse('2026-11-15T09:00:00Z') / 1000), chat: { id: OWNER_TG }, from: { id: OWNER_TG }, text } });
+
+  function setup(generate) {
+    const stub = stubOpenAI(generate);
+    const telegram = [];
+    const fn = async (url, init = {}) => {
+      if (String(url).includes('api.telegram.org')) {
+        telegram.push({ method: String(url).split('/').pop(), ...(init.body ? JSON.parse(init.body) : {}) });
+        return { ok: true, json: async () => ({ ok: true, result: {} }) };
+      }
+      return stub.fn(url, init);
+    };
+    const deps = { env: { TELEGRAM_BOT_TOKEN: 'T', TELEGRAM_ALLOWED_USER_ID: String(OWNER_TG), OPENAI_API_KEY: 'sk-test' }, supabase: fake.service(), fetch: fn };
+    return { stub, telegram, deps };
+  }
+
+  function seedCloud() {
+    const t = fake.tables;
+    t.brain_documents.push({ id: '00000000-0000-4000-8000-0000000000d1', user_id: owner, title: 'Chat Carriera', source_provider: 'claude', domain: 'work', original_date: '2025-03-10T09:00:00.000Z', chunk_count: 1, facts_extracted_count: 0, is_deleted: false, extra: {} });
+    t.brain_memories.push({ id: '00000000-0000-4000-8000-0000000000d2', user_id: owner, document_id: '00000000-0000-4000-8000-0000000000d1', chunk_index: 0, title: 'Chat Carriera', content: 'TechCorp chiede uno sconto del 20% sul progetto Alfa. Tariffa 60 euro l\'ora.', domain: 'work', source_type: 'document', is_deleted: false, embedding_source: 'openai', embedding: JSON.stringify(computeLocalEmbedding('TechCorp chiede uno sconto del 20% sul progetto Alfa. Tariffa 60 euro l\'ora.')), extra: {} });
+    t.finance_transactions.push({ id: '00000000-0000-4000-8000-0000000000d3', user_id: owner, type: 'expense', amount: 999, description: 'Spesa privata', date: '2026-11-15', is_deleted: false, extra: {} });
+  }
+
+  it('1. il comando è riconosciuto (anche con @NomeBot) e senza domanda spiega come usarlo', async () => {
+    expect(parseCommand('/ask Cosa avevamo deciso per TechCorp?')).toEqual({ name: 'ask', args: 'Cosa avevamo deciso per TechCorp?' });
+    expect(parseCommand('/ask@MioBot ciao')).toEqual({ name: 'ask', args: 'ciao' });
+    const { deps, telegram, stub } = setup(() => ({}));
+    await handleUpdate(msg('/ask'), deps);
+    expect(telegram.at(-1).text).toMatch(/Usa <code>\/ask domanda<\/code>/);
+    expect(stub.calls.generate).toHaveLength(0);
+  });
+
+  it('2. /ask risponde con lo stesso motore dell\'app: fonti citate, profilo e interruttori privacy identici', async () => {
+    seedCloud();
+    fake.tables.brain_assistant_profiles.push({ id: '00000000-0000-4000-8000-0000000000d4', user_id: owner, global_instructions: 'Zero convenevoli.', domain_rules: { work: 'Valuta il rischio cliente unico.' }, live_data_permissions: { body: true, todos_calendar: true, clients: false, finances: false }, extra: {} });
+    const { deps, telegram, stub } = setup(() => ({ answer: 'Avevate parlato di uno sconto del 20%.', used_sources: ['S1'] }));
+    await handleUpdate(msg('/ask Cosa avevamo deciso per TechCorp sulla tariffa?'), deps);
+
+    expect(telegram.some(t => t.method === 'sendChatAction')).toBe(true);
+    const system = stub.calls.generate[0].system;
+    expect(system).toContain('Zero convenevoli.');
+    expect(system).toContain('Valuta il rischio cliente unico.');   // ambito "lavoro" riconosciuto
+    expect(system).toContain('sconto del 20%');
+    expect(system).not.toContain('Spesa privata');                   // finanze spente
+    const reply = telegram.filter(t => t.method === 'sendMessage').at(-1).text;
+    expect(reply).toContain('Avevate parlato di uno sconto del 20%.');
+    expect(reply).toContain('Fonti usate:');
+    expect(reply).toContain('Chat Carriera');
+  });
+
+  it('3. se l\'IA non risponde lo dice con il motivo, senza inventare; i messaggi lunghi si dividono sotto il limite di Telegram', async () => {
+    const { deps, telegram } = setup(() => ({}));
+    const failing = stubOpenAI(() => ({}), { generateFail: 500 });
+    const fn = deps.fetch;
+    deps.fetch = async (url, init) => (String(url).includes('telegram') ? fn(url, init) : failing.fn(url, init));
+    await handleUpdate(msg('/ask ciao'), deps);
+    expect(telegram.filter(t => t.method === 'sendMessage').at(-1).text).toMatch(/Non sono riuscito a rispondere/);
+
+    const long = Array.from({ length: 300 }, (_, i) => `Riga numero ${i} con del testo di riempimento abbastanza lungo`).join('\n');
+    const pieces = splitForTelegram(long);
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.every(p => p.length <= 3900)).toBe(true);
+    expect(pieces.join('\n').replace(/\s+/g, ' ')).toBe(long.replace(/\s+/g, ' '));
+  });
+
+  it('4. chi non è autorizzato non può interrogare l\'archivio', async () => {
+    seedCloud();
+    const { deps, telegram, stub } = setup(() => ({ answer: 'segreto', used_sources: [] }));
+    const intruder = { update_id: 77, message: { message_id: 1, date: 1, chat: { id: 1 }, from: { id: 1 }, text: '/ask tariffa TechCorp' } };
+    await handleUpdate(intruder, deps);
+    expect(stub.calls.generate).toHaveLength(0);
+    expect(telegram.at(-1).text).toMatch(/non sei autorizzato/i);
+  });
+});

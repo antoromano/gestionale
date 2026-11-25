@@ -22,6 +22,7 @@ import { getSupabase } from './services/supabase.js';
 import { getSession, signOut, onAuthChange } from './services/auth.js';
 import { cloud } from './services/cloud.js';
 import { exportFullBackup, openImportModal } from './modules/backup.js';
+import { shouldUseMobileUi } from './utils/device.js';
 
 // Espone i moduli globalmente per interazioni rapide
 window._appModules = {
@@ -242,6 +243,18 @@ async function startApp(session) {
   });
 
   document.body.classList.remove('is-loading');
+
+  // Telefono: interfaccia dedicata, caricata a parte (il computer non scarica né il suo codice né i suoi stili)
+  if (shouldUseMobileUi()) {
+    document.body.classList.add('is-mobile-ui');
+    const { startMobileApp } = await import('./mobile/mobile-app.js');
+    startMobileApp({ session });
+    onAuthChange((event) => {
+      if (event === 'SIGNED_OUT') location.reload();
+    });
+    return;
+  }
+
   buildShell();
   window.appRouter = new Router();
   wireInbox(window.appRouter);

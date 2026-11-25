@@ -7,6 +7,7 @@ import { NODE_TYPE_META, upsertFact, upsertNode, upsertGraphRelationship, syncCl
 import { recalculateDocumentEmbeddings } from '../services/brain-docs.js';
 import { openAssistantProfileModal } from './brain-profile.js';
 import { escapeHtml } from '../utils/formatters.js';
+import { getUiMode, setUiMode } from '../utils/device.js';
 import {
   getTelegramIntegrationStatus,
   sendTelegramTestMessage,
@@ -478,6 +479,21 @@ export function renderSettings(container, router) {
         <div id="brain-advanced-feedback" style="margin-top: 10px;"></div>
       </div>
 
+      <!-- INTERFACCIA: COMPUTER / TELEFONO -->
+      <div class="card" id="ui-mode-card">
+        <div class="card-header">
+          <div class="card-title">Interfaccia</div>
+        </div>
+        <p class="muted" style="margin-bottom: 12px;">
+          Su schermi stretti l'app usa da sola l'interfaccia per telefono. Qui puoi provarla anche dal computer, o forzare una delle due su questo dispositivo.
+          Adesso: <strong>${getUiMode() === 'auto' ? 'automatica' : getUiMode() === 'mobile' ? 'sempre telefono' : 'sempre computer'}</strong>.
+        </p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button type="button" class="btn btn-secondary" data-ui-mode="mobile">Passa a UI Mobile</button>
+          <button type="button" class="btn btn-secondary" data-ui-mode="auto" ${getUiMode() === 'auto' ? 'disabled' : ''}>Torna alla scelta automatica</button>
+        </div>
+      </div>
+
       <!-- 5. GESTIONE DATI: DEMO E RESET -->
       <div class="card" style="border-color: rgba(220, 38, 38, 0.2);">
         <div class="card-header">
@@ -655,6 +671,10 @@ export function renderSettings(container, router) {
     } finally {
       btn.disabled = false;
     }
+  });
+
+  container.querySelectorAll('[data-ui-mode]').forEach(btn => {
+    btn.addEventListener('click', () => setUiMode(btn.getAttribute('data-ui-mode')));
   });
 
   container.querySelector('#reset-all-data-btn').addEventListener('click', () => {

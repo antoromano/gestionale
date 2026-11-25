@@ -12,6 +12,7 @@ Software gestionale web moderno, reattivo, installabile come **PWA (Progressive 
 
 | Versione | Data | Cosa è stato aggiunto e sistemato |
 | :--- | :--- | :--- |
+| **[v2.3.0](./CHANGELOG.md#v230--2026-11-25--interfaccia-dedicata-per-telefono-second-brain-mobile)** | `2026-11-25` | **Interfaccia per telefono ("Second Brain Mobile")**: UI separata sotto i 768 px (forzabile da Impostazioni / Profilo), barra a 5 schede + pulsante **+**, Home, Agenda, To-do, Corpo senza matrice, AI (Briefing · Chat · Coach), Entrate e uscite, Second Brain, Clienti, Cerca, Profilo. Caricata solo sul telefono, zero impatto sulla vista per computer. |
 | **[v2.2.0](./CHANGELOG.md#v220--2026-11-17--design-system-warm-daylight-studio--ux-redesign)** | `2026-11-17` | **Design System "Warm Daylight Studio" & UX Redesign**: unificazione fogli di stile (`main.css` + `ui.css`), palette riposante ad alto contrasto WCAG AAA, **Side-Drawer laterale non bloccante** per l'Assistente AI su desktop (espandibile `480px` ↔ `740px` senza coprire i dati del gestionale), compattazione bottoni tabella Preventivi, KPI card e barre filtro uniformate, skeleton shimmer loader. |
 | **[v2.1.0](./CHANGELOG.md#v210--2026-11-17--personal-rag-chiedi-a-te-stesso-importatore-storico--ask-telegram)** | `2026-11-17` | **Personal RAG ("Chiedi a te stesso") & Importatore Fonti**: migrazione `010_personal_rag.sql`, Edge Function `personal-rag-chat`, ricerca ibrida (`pgvector` OpenAI 768d + Full-Text italiano), importatore conversazioni ChatGPT / Claude / Gemini Takeout / PDF / Markdown con stima costi e pausa/ripresa, estrazione fatti solo dai messaggi dell'utente con data originale, interruttori privacy (**Finanze escluse di default**), comando Telegram `/ask`. |
 | **[v2.0.0](./CHANGELOG.md#v200--2026-11-16--architettura-cloud-first-catena-multi-provider-ai--dedup-telegram)** | `2026-11-16` | **Cloud-First, Catena Multi-Provider AI & Dedup Telegram**: migrazioni `007`–`009`, sincronizzazione Realtime tra Web App e Telegram con blocco a singolo proprietario, catena AI con failover automatico (**OpenAI** ➔ **Gemini Lite** ➔ **Claude**), elaborazione Telegram in background anti-doppioni, tasto *Annulla* (5s), navigazione *Indietro* e CRUD completi. |
@@ -129,7 +130,8 @@ Gestionale1/
 │   │   ├── 002_storage_buckets.sql   # Bucket e policy sicurezza storage
 │   │   └── 006_finances_and_queue.sql # finance_transactions, trading_items, ai_note_queue (+ copia idempotente di expenses)
 │   └── functions/
-│       ├── gemini-assistant/index.ts      # Edge Function Gemini Multimodal
+│       ├── gemini-assistant/index.ts      # Edge Function IA (generate/embed/diagnose)
+│       ├── personal-rag-chat/index.ts     # Edge Function chat personale "Chiedi a te stesso"
 │       ├── google-calendar-sync/index.ts  # Edge Function 2-Way Google Calendar
 │       └── notion-sync/index.ts           # Edge Function Notion To-do
 └── tests/
@@ -182,8 +184,16 @@ Toggle `🤝 Assistente Costruttivo | 😈 Avvocato del Diavolo` nell'header del
 - **Second Brain**: prima mostra "Cosa ho capito" e salva solo dopo la tua conferma.
 - **Inbox unico** in alto: scrivi qualsiasi cosa e Invio; "Da parte" mette la nota in coda per elaborarla in blocco con una sola richiesta IA.
 
+### Chiedi a te stesso (archivio personale)
+Nel **Second Brain** la scheda **Chiedi** è una chat che risponde usando solo quello che sa di te, e sotto ogni risposta mostra le **fonti** (clic per leggere il testo d'origine). Tre fonti insieme: i pezzi di documenti e vecchie chat (ricerca per significato + parole esatte), i fatti salvati e i dati di oggi del gestionale.
+- **Fonti**: importa `conversations.json` di ChatGPT o Claude, l'attività Gemini di Google Takeout, PDF, `.md`, `.txt` o testo incollato. Scegli tu cosa importare, vedi il costo stimato, un elemento alla volta con pausa/ripresa. Il testo originale ripulito si conserva; i fatti si ricavano **solo dai tuoi messaggi** (ogni fatto deve citare una tua frase) e hanno la **data della chat**: un'informazione vecchia non scavalca una più recente, va nello storico.
+- **Istruzioni e privacy**: regole generali + regole per argomento (cucina, lavoro, corpo, tecnica, personale) e interruttori sui dati vivi del gestionale. **Entrate e uscite e Clienti sono spenti di default.**
+- **Telegram**: `/ask domanda` usa lo stesso motore (stesse istruzioni, fonti e interruttori).
+- Pezzi e testo originale stanno solo nel database (cercati sul server); nel browser resta la scheda del documento. Vettori di ricerca: OpenAI `text-embedding-3-small` a 768 numeri. Dopo il cambio di fornitore: Impostazioni → Avanzate → *Ricalcola la ricerca per significato*.
+- Funzione server: `personal-rag-chat` (richiede login, legge con i permessi dell'utente). Migrazione `010_personal_rag.sql`.
+
 ### Segreti da impostare su Supabase (Edge Functions → Secrets)
-`OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` (ne basta una, meglio due: la seconda fa da riserva), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`. Opzionali: `OPENAI_MODEL`, `GEMINI_MODEL`, `ANTHROPIC_MODEL` (per forzare un modello). Mai nel codice o in chat.
+`OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` (ne basta una, meglio due: la seconda fa da riserva), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`. Opzionali: `OPENAI_MODEL`, `OPENAI_EMBED_MODEL`, `GEMINI_MODEL`, `ANTHROPIC_MODEL` (per forzare un modello). Mai nel codice o in chat.
 
 ### Edge Functions: codice condiviso
 `src/services/gemini-core.js` è la copia canonica; `node scripts/sync-edge-shared.mjs` la copia nelle funzioni. Un test verifica che non ci siano differenze.

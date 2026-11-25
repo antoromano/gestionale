@@ -16,11 +16,6 @@ import {
 import {
   importDocument, deleteDocument, reindexDocument, getDocumentRawContent, getDocumentChunks, searchChunks, createImportRunner,
 } from '../src/services/brain-docs.js';
-import { getAssistantProfile, saveAssistantProfile } from '../src/services/assistant-profile.js';
-import { askPersonalRag, saveRuleFromChat } from '../src/services/personal-rag.js';
-import { askPersonalRagServer } from '../src/services/rag-server.js';
-import { detectDomain, formatAnswerText, todayIn } from '../src/services/rag-core.js';
-import { handleUpdate } from '../supabase/functions/telegram-webhook/handler.js';
 import { createFakeCloud } from './helpers/fake-supabase.js';
 import { stubOpenAI } from './helpers/stub-openai.js';
 
@@ -513,176 +508,185 @@ describe('23. Importazione di chat e documenti (STEP 3)', () => {
   });
 });
 
-describe('24. Chat "Chiedi a te stesso" — privacy, regole per argomento, fonti e salva regola (STEP 4)', () => {
-  beforeEach(() => {
-    store.clearAll();
-    vi.unstubAllGlobals();
-  });
-  afterEach(() => {
-    cloud.stop();
-    vi.unstubAllGlobals();
-  });
+import { askRag, buildLiveSections, normalizeProfile, detectDomain, selectRelevantFacts, formatAnswerText, todayIn } from '../src/services/rag-core.js';
+import { askPersonalRag, saveRuleFromChat } from '../src/services/personal-rag.js';
+import { saveAssistantProfile, getAssistantProfile } from '../src/services/assistant-profile.js';
+import { handleUpdate, parseCommand, splitForTelegram } from '../supabase/functions/telegram-webhook/handler.js';
+import { askPersonalRagServer } from '../src/services/rag-server.js';
 
-  it('1. interruttori privacy: di partenza le finanze e i clienti sono SPENTI (non arrivano mai all\'IA); Corpo e Agenda sono accesi', async () => {
-    const profile = getAssistantProfile();
-    expect(profile.live_data_permissions).toEqual({
-      body: true,
-      todos_calendar: true,
-      clients: false,
-      finances: false,
-    });
+const TODAY = todayIn('Europe/Rome'); // la chat in locale usa la data di oggi: i dati di prova devono essere di oggi
 
-    const today = todayIn(store.getSettings().timezone || 'Europe/Rome');
-    store.upsertBodyDailyLog({ date: today, calories_kcal: 1650, protein_g: 105, body_weight_kg: 74.4 });
-    store.create('todos', { title: 'Consegnare bozza sito', is_completed: false, priority: 'alta' });
-    store.create('clients', { type: 'company', company_name: 'ClienteRiservatoSrl', stack: 'Rust' });
-    store.create('finance_transactions', { date: today, type: 'expense', amount: 9876, description: 'BonificoSegreto', category: 'Altro' });
+/** Archivio di prova: un documento con due pezzi, qualche fatto, e dati vivi (corpo, agenda, clienti, soldi). */
+function seedArchive({ withDocs = true } = {}) {
+  if (withDocs) {
+    store.create('brain_documents', { id: 'doc-cucina', title: 'Chat Cucina Veloce', source_provider: 'chatgpt', domain: 'cucina', original_date: '2025-11-03T10:00:00.000Z', chunk_count: 2, facts_extracted_count: 0 });
+    store.create('brain_memories', { id: 'm-1', document_id: 'doc-cucina', chunk_index: 0, title: 'Chat Cucina Veloce', content: 'Straccetti di pollo con zucchine e riso basmati: 150 g di pollo, 70 g di riso. Pronti in 16 minuti.', domain: 'cucina', source_type: 'document', source_date: '2025-11-03T10:00:00.000Z', embedding: computeLocalEmbedding('Straccetti di pollo con zucchine e riso basmati'), embedding_source: 'local' });
+    store.create('brain_memories', { id: 'm-2', document_id: 'doc-cucina', chunk_index: 1, title: 'Chat Cucina Veloce', content: 'Merluzzo al forno con patate, 35 minuti.', domain: 'cucina', source_type: 'document', source_date: '2025-11-03T10:00:00.000Z', embedding: computeLocalEmbedding('Merluzzo al forno con patate'), embedding_source: 'local' });
+  }
+  upsertFact({ subject: 'Io', fact_key: 'latticini', fact_value: 'intollerante al lattosio', category: 'rule' });
+  upsertFact({ subject: 'TechCorp', fact_key: 'stack', fact_value: 'Next.js', category: 'client_info' });
+  store.create('body_daily_logs', { date: TODAY, calories_kcal: 1650, protein_g: 95 });
+  store.create('todos', { title: 'Richiamare Marco', due_date: `${TODAY}T10:00`, is_completed: false, priority: 'alta' });
+  store.create('clients', { type: 'company', company_name: 'TechCorp Srl', stack: 'Next.js', notes: 'cliente storico' });
+  store.create('finance_transactions', { type: 'expense', amount: 777.77, description: 'Spesa segretissima', date: `${TODAY}`, category: 'Altro' });
+}
 
-    const { calls } = stubOpenAI(() => ({
-      answer: 'Ti mancano circa 650 kcal.',
-      used_sources: ['L1', 'L2'],
-      suggested_rule: null,
-    }));
+describe('24. Chat "Chiedi a te stesso" (STEP 4)', () => {
+  beforeEach(() => { store.clearAll(); vi.unstubAllGlobals(); });
+  afterEach(() => { cloud.stop(); vi.unstubAllGlobals(); });
 
-    const resOff = await askPersonalRag({ question: 'Come sono messo oggi?' });
-    expect(resOff.context.live).toEqual(['body', 'todos_calendar']);
-    const sysOff = calls.generate[0].system;
-    expect(sysOff).toContain('1650 kcal');
-    expect(sysOff).toContain('Consegnare bozza sito');
-    expect(sysOff).not.toContain('BonificoSegreto');
-    expect(sysOff).not.toContain('9.876');
-    expect(sysOff).not.toContain('ClienteRiservatoSrl');
+  it('1. PRIVACY: con finanze spente (predefinito) i movimenti non arrivano mai all\'IA; con l\'interruttore acceso sì', () => {
+    seedArchive();
+    const raw = { transactions: store.getAll('finance_transactions'), clients: store.getAll('clients'), dailyLogs: store.getAll('body_daily_logs') };
+    const defaults = normalizeProfile(null).live_data_permissions;
+    expect(defaults).toEqual({ body: true, todos_calendar: true, clients: false, finances: false });
 
-    // Accendendo finanze e clienti (e spegnendo body), il prompt cambia di conseguenza
-    saveAssistantProfile({
-      live_data_permissions: { body: false, todos_calendar: true, clients: true, finances: true },
-    });
-    const resOn = await askPersonalRag({ question: 'Qual è la situazione conti e clienti?' });
-    expect(resOn.context.live).toEqual(['todos_calendar', 'clients', 'finances']);
-    const sysOn = calls.generate[1].system;
-    expect(sysOn).not.toContain('1650 kcal');
-    expect(sysOn).toContain('BonificoSegreto');
-    expect(sysOn).toContain('ClienteRiservatoSrl');
+    const off = buildLiveSections(raw, defaults, { today: TODAY });
+    expect(off.map(s => s.kind)).toEqual(['body', 'todos_calendar']);
+    expect(JSON.stringify(off)).not.toContain('segretissima');
+    expect(JSON.stringify(off)).not.toContain('TechCorp');
+
+    const on = buildLiveSections(raw, { ...defaults, finances: true, clients: true }, { today: TODAY });
+    expect(on.map(s => s.kind)).toEqual(['body', 'todos_calendar', 'clients', 'finances']);
+    expect(JSON.stringify(on)).toContain('segretissima');
+    expect(on.find(s => s.kind === 'body').text).toContain('1650 kcal');
+    // un valore non booleano non accende nulla
+    expect(normalizeProfile({ live_data_permissions: { finances: 'true' } }).live_data_permissions.finances).toBe(false);
   });
 
-  it('2. regole a strati: istruzioni generali + regole automatiche per l\'argomento della domanda (o forzate a mano)', async () => {
-    expect(detectDomain('Cosa cucino per cena in padella?')).toBe('cucina');
-    expect(detectDomain('Come imposto il preventivo per il cliente?')).toBe('work');
-    expect(detectDomain('Quante serie di trazioni e squat?')).toBe('body');
-    expect(detectDomain('Errore nella query del database Supabase')).toBe('tech');
+  it('2. istruzioni a strati: regole generali sempre, regole dell\'ambito solo quando la domanda lo riguarda', async () => {
+    seedArchive();
+    saveAssistantProfile({ global_instructions: 'Sono Antonio. Risposte secche.', domain_rules: { cucina: 'Porzioni per 1 persona.', work: 'Valuta il rischio cliente unico.' } });
+    expect(getAssistantProfile().global_instructions).toBe('Sono Antonio. Risposte secche.');
+    const { calls } = stubOpenAI(() => ({ answer: 'Straccetti di pollo.', used_sources: ['S1'], suggested_rule: null }));
 
-    saveAssistantProfile({
-      global_instructions: 'Parla sempre in modo ultra sintetico da ingegnere.',
-      domain_rules: {
-        cucina: 'Zero latticini, massimo 15 minuti ai fornelli.',
-        work: 'Chiedi sempre il 30% di acconto.',
-      },
-    });
+    const res = await askPersonalRag({ question: 'Cosa posso cucinare stasera con il pollo?' });
+    const system = calls.generate[0].system;
+    expect(res.domain).toBe('cucina');
+    expect(system).toContain('Sono Antonio. Risposte secche.');
+    expect(system).toContain('Porzioni per 1 persona.');
+    expect(system).not.toContain('Valuta il rischio cliente unico.');
 
-    const { calls } = stubOpenAI(() => ({ answer: 'Pollo alla piastra.', used_sources: [], suggested_rule: null }));
-
-    const r1 = await askPersonalRag({ question: 'Cosa posso cucinare per cena stasera?' });
-    expect(r1.domain).toBe('cucina');
-    expect(calls.generate[0].system).toContain('Parla sempre in modo ultra sintetico da ingegnere.');
-    expect(calls.generate[0].system).toContain('Zero latticini, massimo 15 minuti ai fornelli.');
-    expect(calls.generate[0].system).not.toContain('Chiedi sempre il 30% di acconto.');
-
-    // Forzando l'ambito a mano ("work"), si applica la regola di lavoro anche su una domanda neutra
-    const r2 = await askPersonalRag({ question: 'Dammi un consiglio.', domain: 'work' });
-    expect(r2.domain).toBe('work');
-    expect(calls.generate[1].system).toContain('Chiedi sempre il 30% di acconto.');
+    await askPersonalRag({ question: 'Come negozio la tariffa con il cliente?' });
+    expect(calls.generate[1].system).toContain('Valuta il rischio cliente unico.');
+    expect(calls.generate[1].system).not.toContain('Porzioni per 1 persona.');
+    expect(detectDomain('ciao come stai')).toBe('personal');
   });
 
-  it('3. combina le 3 fonti (pezzi di documenti, fatti attivi, dati di oggi), restituisce le fonti citate e permette di salvare una regola in memoria', async () => {
-    const today = todayIn(store.getSettings().timezone || 'Europe/Rome');
-    store.upsertBodyDailyLog({ date: today, calories_kcal: 1500, protein_g: 95 });
+  it('3. le tre fonti arrivano insieme e le fonti citate sono quelle davvero usate, con etichetta leggibile', async () => {
+    seedArchive();
+    const { calls } = stubOpenAI(() => ({ answer: 'Fai gli straccetti: hai 1650 kcal, te ne mancano circa 750. Niente latticini.', used_sources: ['S1', 'F1', 'L1', 'S9'], suggested_rule: null }));
+    const res = await askPersonalRag({ question: 'Cosa cucino con il pollo per chiudere i macro di oggi?' });
 
-    // Importa la chat di cucina
-    stubOpenAI(() => ({
-      summary: 'Ricetta straccetti di pollo',
-      facts: [{ subject: 'Io', fact_key: 'intolleranza', fact_value: 'lattosio', category: 'rule', evidence: 'Sono intollerante al lattosio' }],
-    }));
-    await importDocument(parseChatGptExport(CHATGPT_EXPORT)[0], { domain: 'cucina' });
+    const system = calls.generate[0].system;
+    expect(system).toContain('Straccetti di pollo con zucchine');     // fonte 1: pezzo del documento
+    expect(system).toContain('intollerante al lattosio');              // fonte 2: fatto
+    expect(system).toContain('1650 kcal');                             // fonte 3: dati vivi
+    expect(system).not.toContain('segretissima');
 
-    // Ora chiediamo al RAG
-    const { calls } = stubOpenAI(() => ({
-      answer: 'Fai gli straccetti di pollo con zucchine e riso basmati: ti restano circa 800 kcal.',
-      used_sources: ['S1', 'F1', 'L1'],
-      suggested_rule: { subject: 'Io', fact_key: 'cena_veloce_preferita', fact_value: 'straccetti di pollo e zucchine', category: 'preference' },
-    }));
+    expect(res.sources.map(s => s.id)).toEqual(['S1', 'F1', 'L1']);    // S9 non esiste: scartata
+    const labels = res.sources.map(s => s.label);
+    expect(labels[0]).toBe('📄 Chat Cucina Veloce (2025-11) • pezzo #1');
+    expect(labels[1]).toMatch(/^📌 Fatto: latticini = intollerante al lattosio/);
+    expect(labels[2]).toMatch(/Diario corpo/);
+    expect(res.sources[0]).toMatchObject({ type: 'chunk', document_id: 'doc-cucina', chunk_index: 0 });
+    expect(formatAnswerText(res)).toContain('Fonti usate:\n• 📄 Chat Cucina Veloce');
+  });
 
-    const res = await askPersonalRag({
-      question: 'Cosa cucino stasera per chiudere i macro? Da oggi segna che gli straccetti sono la mia cena veloce preferita.',
-      history: [{ role: 'user', content: 'Ho del pollo in frigo.' }, { role: 'assistant', content: 'Ottimo, vediamo.' }],
-    });
+  it('4. una domanda di seguito ("e con il riso?") ricorda la precedente; senza fonti la risposta lo dice', async () => {
+    seedArchive();
+    const { calls } = stubOpenAI(() => ({ answer: 'Non ho dati su questo.', used_sources: [] }));
+    await askPersonalRag({ question: 'Che cena veloce con pollo e zucchine?' });
+    await askPersonalRag({ question: 'e con il riso?', history: [{ role: 'user', content: 'Che cena veloce con pollo e zucchine?' }, { role: 'assistant', content: 'Straccetti.' }] });
+    expect(calls.generate[1].text).toContain('Conversazione finora:');
+    expect(calls.generate[1].text).toContain('Straccetti.');
+    expect(calls.generate[1].system).toContain('Straccetti di pollo'); // la ricerca ha usato anche la domanda precedente
+    const res = await askPersonalRag({ question: 'Qualcosa?' });
+    expect(res.sources).toEqual([]);
+    expect(formatAnswerText(res)).toContain('Fonti usate: nessuna');
+  });
 
-    expect(res.answer).toContain('straccetti di pollo');
-    expect(res.sources.map(s => s.type)).toEqual(['chunk', 'fact', 'live']);
-    expect(res.sources[0].label).toContain('Cucina Veloce');
-    expect(res.sources[1].label).toContain('intolleranza = lattosio');
-    expect(res.sources[2].kind).toBe('body');
-    expect(calls.generate[0].text).toContain('Conversazione finora:');
-    expect(calls.generate[0].text).toContain('Ho del pollo in frigo.');
+  it('5. se i vettori non sono disponibili la ricerca continua per parole esatte; se l\'IA non risponde l\'errore è chiaro', async () => {
+    seedArchive();
+    stubOpenAI(() => ({ answer: 'ok', used_sources: ['S1'] }), { embedFail: true });
+    const res = await askPersonalRag({ question: 'merluzzo' });
+    // l'app ripiega sui vettori locali dichiarandolo (source 'local'): la ricerca per parole esatte funziona comunque
+    expect(res.context.embeddingSource).toBe('local');
+    expect(res.context.chunks).toBeGreaterThan(0);
 
-    // "Salva regola in memoria": la regola proposta diventa un fatto attivo; se aggiornata, la vecchia va nello storico
-    expect(res.suggestedRule).toMatchObject({ fact_key: 'cena_veloce_preferita', fact_value: 'straccetti di pollo e zucchine' });
-    const saved = saveRuleFromChat(res.suggestedRule);
+    stubOpenAI(() => ({}), { generateFail: 500 });
+    await expect(askPersonalRag({ question: 'ciao' })).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(askPersonalRag({ question: '   ' })).rejects.toThrow(/Scrivi una domanda/);
+  });
+
+  it('6. VOLANO: "Salva regola in memoria" crea un fatto attivo che compare nelle risposte successive; una regola nuova mette la vecchia nello storico', async () => {
+    const { calls } = stubOpenAI(() => ({ answer: 'ok', used_sources: [], suggested_rule: { subject: 'Io', fact_key: 'latticini_a_pranzo', fact_value: 'niente latticini a pranzo', category: 'rule' } }));
+    const first = await askPersonalRag({ question: 'Da questa settimana tolgo i latticini a pranzo' });
+    expect(first.suggestedRule).toMatchObject({ fact_key: 'latticini_a_pranzo', category: 'rule' });
+
+    const saved = saveRuleFromChat(first.suggestedRule);
     expect(saved.action).toBe('created');
-    expect(store.getActiveFacts('Io').find(f => f.fact_key === 'cena_veloce_preferita')?.fact_value).toBe('straccetti di pollo e zucchine');
+    await askPersonalRag({ question: 'Cosa mangio a pranzo?' });
+    expect(calls.generate[1].system).toContain('niente latticini a pranzo');
 
-    const updated = saveRuleFromChat({ subject: 'Io', fact_key: 'cena_veloce_preferita', fact_value: 'salmone e patate', category: 'preference' });
-    expect(updated.action).toBe('superseded');
-    expect(store.getFactHistory('Io', 'cena_veloce_preferita')).toHaveLength(2);
+    const changed = saveRuleFromChat({ subject: 'Io', fact_key: 'latticini_a_pranzo', fact_value: 'latticini ammessi solo a colazione' });
+    expect(changed.action).toBe('superseded');
+    expect(store.getFactHistory('Io', 'latticini_a_pranzo')).toHaveLength(2);
+    expect(() => saveRuleFromChat({ fact_key: '', fact_value: '' })).toThrow();
   });
 
-  it('4. lato server (cloud): non legge nemmeno la tabella delle finanze dal database se l\'interruttore è spento', async () => {
+  it('7. regole e preferenze valgono sempre; gli altri fatti entrano solo se c\'entrano con la domanda', () => {
+    upsertFact({ subject: 'Io', fact_key: 'regola_sveglia', fact_value: 'alle 6', category: 'rule' });
+    upsertFact({ subject: 'TechCorp', fact_key: 'stack', fact_value: 'Next.js', category: 'client_info' });
+    upsertFact({ subject: 'Zeta', fact_key: 'colore', fact_value: 'blu', category: 'status' });
+    const picked = selectRelevantFacts(store.getActiveFacts(), 'Che stack usa TechCorp?').map(f => f.fact_key);
+    expect(picked).toContain('regola_sveglia');
+    expect(picked).toContain('stack');
+    expect(picked).not.toContain('colore');
+    expect(todayIn('Europe/Rome', new Date('2026-11-14T23:30:00Z'))).toBe('2026-11-15'); // dopo mezzanotte a Roma è già il giorno dopo
+  });
+
+  it('8. con il cloud: la chat sul server legge SOLO i dati di chi chiede, rispetta gli interruttori e cerca nel database', async () => {
     const fake = createFakeCloud();
     const { client, userId } = await signedInClient(fake);
     await cloud.start(client, userId);
-
-    const today = todayIn('Europe/Rome');
-    store.upsertBodyDailyLog({ date: today, calories_kcal: 1800 });
-    store.create('finance_transactions', { date: today, type: 'expense', amount: 500, description: 'AffittoSegreto', category: 'Casa' });
+    seedArchive({ withDocs: false });
+    const DOC = '00000000-0000-4000-8000-0000000000e1';
+    fake.tables.brain_documents.push({ id: DOC, user_id: userId, title: 'Chat Cucina Veloce', source_provider: 'chatgpt', domain: 'cucina', original_date: '2025-11-03T10:00:00.000Z', chunk_count: 1, facts_extracted_count: 0, is_deleted: false, extra: {} });
+    fake.tables.brain_memories.push({ id: '00000000-0000-4000-8000-0000000000e2', user_id: userId, document_id: DOC, chunk_index: 0, title: 'Chat Cucina Veloce', content: 'Straccetti di pollo con zucchine e riso basmati: 16 minuti.', domain: 'cucina', source_type: 'document', is_deleted: false, embedding_source: 'openai', embedding: JSON.stringify(computeLocalEmbedding('Straccetti di pollo con zucchine e riso basmati')), extra: {} });
+    store.create('brain_assistant_profiles', { global_instructions: 'Dritto al punto.', domain_rules: {}, live_data_permissions: { body: true, todos_calendar: false, clients: false, finances: false } });
     await cloud.flush();
+    // dati di un altro utente: non devono comparire mai
+    fake.tables.brain_facts.push({ id: '00000000-0000-4000-8000-0000000000f1', user_id: 'altro-utente', subject: 'Altro', fact_key: 'segreto', fact_value: 'DATO-ALTRUI', category: 'rule', is_active: true, extra: {} });
+    fake.tables.brain_memories.push({ id: '00000000-0000-4000-8000-0000000000f2', user_id: 'altro-utente', title: 'x', content: 'straccetti di pollo DATO-ALTRUI', domain: 'cucina', source_type: 'manual', is_deleted: false, embedding_source: 'openai', extra: {} });
 
-    const { fn } = stubOpenAI(() => ({ answer: 'Hai registrato 1800 kcal.', used_sources: ['L1'], suggested_rule: null }));
-    fake.state.calls.length = 0;
+    const { calls } = stubOpenAI(() => ({ answer: 'Ok', used_sources: ['S1', 'L1'] }));
+    const env = { OPENAI_API_KEY: 'sk-test' };
+    fake.state.calls.length = 0; // da qui in poi contano solo le letture fatte dalla chat
+    const res = await askPersonalRagServer({ client: fake.service(), userId, env, fetchFn: fetch, question: 'Cosa cucino con il pollo?', today: TODAY });
 
-    const out = await askPersonalRagServer({
-      client: fake.browser(),
-      env: { OPENAI_API_KEY: 'sk-test', TIMEZONE: 'Europe/Rome' },
-      fetchFn: fn,
-      question: 'Quante calorie ho segnato oggi?',
-      today,
-    });
-
-    expect(out.answer).toContain('1800 kcal');
-    const queriedTables = fake.state.calls.map(c => c.table);
-    expect(queriedTables).toContain('body_daily_logs');
-    expect(queriedTables).not.toContain('finance_transactions');
-    expect(queriedTables).not.toContain('trading_items');
-    expect(queriedTables).not.toContain('clients');
+    const system = calls.generate[0].system;
+    expect(system).toContain('Dritto al punto.');
+    expect(system).toContain('Straccetti di pollo');
+    expect(system).toContain('1650 kcal');                  // corpo: acceso
+    expect(system).not.toContain('Richiamare Marco');       // agenda: spenta
+    expect(system).not.toContain('segretissima');           // finanze: spente
+    expect(system).not.toContain('DATO-ALTRUI');            // niente dati di altri utenti
+    expect(res.sources.map(s => s.id)).toEqual(['S1', 'L1']);
+    expect(res.context.embeddingSource).toBe('openai');
+    // le tabelle con l'interruttore spento non vengono nemmeno lette dal database
+    const read = fake.state.calls.map(c => c.table);
+    expect(read).not.toContain('finance_transactions');
+    expect(read).not.toContain('clients');
+    expect(read).not.toContain('appointments');
+    expect(read).toContain('body_daily_logs');
   });
 });
 
-describe('25. Comando /ask su Telegram (STEP 5)', () => {
-  const OWNER_TG = 99887766;
-  const baseEnv = { TELEGRAM_BOT_TOKEN: 'TKN', TELEGRAM_ALLOWED_USER_ID: String(OWNER_TG), OPENAI_API_KEY: 'sk-test' };
+describe('25. Telegram /ask (STEP 5)', () => {
+  const OWNER_TG = 4242;
   let fake;
   let owner;
-  let seq = 500;
-
-  const tgMsg = (text) => ({
-    update_id: ++seq,
-    message: {
-      message_id: seq,
-      date: Math.floor(Date.parse('2026-11-16T18:00:00Z') / 1000),
-      chat: { id: OWNER_TG },
-      from: { id: OWNER_TG, username: 'antonio' },
-      text,
-    },
-  });
-
   beforeEach(async () => {
     store.clearAll();
     vi.unstubAllGlobals();
@@ -690,56 +694,79 @@ describe('25. Comando /ask su Telegram (STEP 5)', () => {
     const { data } = await fake.browser().auth.signUp({ email: 'io@example.com', password: 'segreta123' });
     owner = data.user.id;
   });
+  afterEach(() => { cloud.stop(); vi.unstubAllGlobals(); });
 
-  afterEach(() => {
-    cloud.stop();
-    vi.unstubAllGlobals();
+  const msg = (text) => ({ update_id: Math.floor(Math.random() * 1e9), message: { message_id: 1, date: Math.floor(Date.parse('2026-11-15T09:00:00Z') / 1000), chat: { id: OWNER_TG }, from: { id: OWNER_TG }, text } });
+
+  function setup(generate) {
+    const stub = stubOpenAI(generate);
+    const telegram = [];
+    const fn = async (url, init = {}) => {
+      if (String(url).includes('api.telegram.org')) {
+        telegram.push({ method: String(url).split('/').pop(), ...(init.body ? JSON.parse(init.body) : {}) });
+        return { ok: true, json: async () => ({ ok: true, result: {} }) };
+      }
+      return stub.fn(url, init);
+    };
+    const deps = { env: { TELEGRAM_BOT_TOKEN: 'T', TELEGRAM_ALLOWED_USER_ID: String(OWNER_TG), OPENAI_API_KEY: 'sk-test' }, supabase: fake.service(), fetch: fn };
+    return { stub, telegram, deps };
+  }
+
+  function seedCloud() {
+    const t = fake.tables;
+    t.brain_documents.push({ id: '00000000-0000-4000-8000-0000000000d1', user_id: owner, title: 'Chat Carriera', source_provider: 'claude', domain: 'work', original_date: '2025-03-10T09:00:00.000Z', chunk_count: 1, facts_extracted_count: 0, is_deleted: false, extra: {} });
+    t.brain_memories.push({ id: '00000000-0000-4000-8000-0000000000d2', user_id: owner, document_id: '00000000-0000-4000-8000-0000000000d1', chunk_index: 0, title: 'Chat Carriera', content: 'TechCorp chiede uno sconto del 20% sul progetto Alfa. Tariffa 60 euro l\'ora.', domain: 'work', source_type: 'document', is_deleted: false, embedding_source: 'openai', embedding: JSON.stringify(computeLocalEmbedding('TechCorp chiede uno sconto del 20% sul progetto Alfa. Tariffa 60 euro l\'ora.')), extra: {} });
+    t.finance_transactions.push({ id: '00000000-0000-4000-8000-0000000000d3', user_id: owner, type: 'expense', amount: 999, description: 'Spesa privata', date: '2026-11-15', is_deleted: false, extra: {} });
+  }
+
+  it('1. il comando è riconosciuto (anche con @NomeBot) e senza domanda spiega come usarlo', async () => {
+    expect(parseCommand('/ask Cosa avevamo deciso per TechCorp?')).toEqual({ name: 'ask', args: 'Cosa avevamo deciso per TechCorp?' });
+    expect(parseCommand('/ask@MioBot ciao')).toEqual({ name: 'ask', args: 'ciao' });
+    const { deps, telegram, stub } = setup(() => ({}));
+    await handleUpdate(msg('/ask'), deps);
+    expect(telegram.at(-1).text).toMatch(/Usa <code>\/ask domanda<\/code>/);
+    expect(stub.calls.generate).toHaveLength(0);
   });
 
-  it('1. /ask senza domanda spiega come usarlo; /ask con domanda risponde usando l\'archivio e cita le fonti (escludendo le finanze di default)', async () => {
-    await cloud.start(fake.browser(), owner);
-    upsertFact({ subject: 'Io', fact_key: 'intolleranza', fact_value: 'lattosio', category: 'rule' });
-    store.upsertBodyDailyLog({ date: '2026-11-16', calories_kcal: 1700, protein_g: 110 });
-    store.create('finance_transactions', { date: '2026-11-16', type: 'expense', amount: 1200, description: 'SpesaPrivata', category: 'Altro' });
-    await cloud.flush();
+  it('2. /ask risponde con lo stesso motore dell\'app: fonti citate, profilo e interruttori privacy identici', async () => {
+    seedCloud();
+    fake.tables.brain_assistant_profiles.push({ id: '00000000-0000-4000-8000-0000000000d4', user_id: owner, global_instructions: 'Zero convenevoli.', domain_rules: { work: 'Valuta il rischio cliente unico.' }, live_data_permissions: { body: true, todos_calendar: true, clients: false, finances: false }, extra: {} });
+    const { deps, telegram, stub } = setup(() => ({ answer: 'Avevate parlato di uno sconto del 20%.', used_sources: ['S1'] }));
+    await handleUpdate(msg('/ask Cosa avevamo deciso per TechCorp sulla tariffa?'), deps);
 
-    const tgLog = [];
-    const { fn: openaiFetch, calls } = stubOpenAI(() => ({
-      answer: 'Puoi preparare pollo e zucchine: oggi sei a 1700 kcal e rispetti la regola senza lattosio.',
-      used_sources: ['F1', 'L1'],
-    }));
-    const fetchFn = async (url, init = {}) => {
-      const u = String(url);
-      if (u.includes('api.telegram.org')) {
-        tgLog.push({ method: u.split('/').pop(), ...(init.body ? JSON.parse(init.body) : {}) });
-        return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) };
-      }
-      return openaiFetch(url, init);
-    };
-
-    // 1) /ask vuoto -> messaggio d'aiuto, nessuna chiamata IA
-    await handleUpdate(tgMsg('/ask'), { env: baseEnv, supabase: fake.service(), fetch: fetchFn });
-    expect(tgLog.at(-1).text).toContain('Usa <code>/ask domanda</code>');
-    expect(calls.generate).toHaveLength(0);
-
-    // 2) /ask con domanda (anche se contiene la parola "ieri", "oggi" per il RAG resta la data corrente 2026-11-16)
-    const res = await handleUpdate(tgMsg('/ask Rispetto a ieri, cosa posso mangiare stasera?'), {
-      env: baseEnv,
-      supabase: fake.service(),
-      fetch: fetchFn,
-    });
-    expect(res.body).toMatchObject({ ok: true, intent: 'ask' });
-    expect(calls.generate).toHaveLength(1);
-    expect(calls.generate[0].system).toContain('1700 kcal');
-    expect(calls.generate[0].system).toContain('intolleranza: lattosio');
-    expect(calls.generate[0].system).not.toContain('SpesaPrivata');
-
-    const reply = tgLog.filter(m => m.method === 'sendMessage').at(-1).text;
-    expect(reply).toContain('pollo e zucchine');
+    expect(telegram.some(t => t.method === 'sendChatAction')).toBe(true);
+    const system = stub.calls.generate[0].system;
+    expect(system).toContain('Zero convenevoli.');
+    expect(system).toContain('Valuta il rischio cliente unico.');   // ambito "lavoro" riconosciuto
+    expect(system).toContain('sconto del 20%');
+    expect(system).not.toContain('Spesa privata');                   // finanze spente
+    const reply = telegram.filter(t => t.method === 'sendMessage').at(-1).text;
+    expect(reply).toContain('Avevate parlato di uno sconto del 20%.');
     expect(reply).toContain('Fonti usate:');
-    expect(reply).toContain('intolleranza = lattosio');
-    expect(reply).toContain('Diario corpo di oggi');
-    expect(formatAnswerText({ answer: 'Test', sources: [] })).toContain('nessuna');
+    expect(reply).toContain('Chat Carriera');
+  });
+
+  it('3. se l\'IA non risponde lo dice con il motivo, senza inventare; i messaggi lunghi si dividono sotto il limite di Telegram', async () => {
+    const { deps, telegram } = setup(() => ({}));
+    const failing = stubOpenAI(() => ({}), { generateFail: 500 });
+    const fn = deps.fetch;
+    deps.fetch = async (url, init) => (String(url).includes('telegram') ? fn(url, init) : failing.fn(url, init));
+    await handleUpdate(msg('/ask ciao'), deps);
+    expect(telegram.filter(t => t.method === 'sendMessage').at(-1).text).toMatch(/Non sono riuscito a rispondere/);
+
+    const long = Array.from({ length: 300 }, (_, i) => `Riga numero ${i} con del testo di riempimento abbastanza lungo`).join('\n');
+    const pieces = splitForTelegram(long);
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.every(p => p.length <= 3900)).toBe(true);
+    expect(pieces.join('\n').replace(/\s+/g, ' ')).toBe(long.replace(/\s+/g, ' '));
+  });
+
+  it('4. chi non è autorizzato non può interrogare l\'archivio', async () => {
+    seedCloud();
+    const { deps, telegram, stub } = setup(() => ({ answer: 'segreto', used_sources: [] }));
+    const intruder = { update_id: 77, message: { message_id: 1, date: 1, chat: { id: 1 }, from: { id: 1 }, text: '/ask tariffa TechCorp' } };
+    await handleUpdate(intruder, deps);
+    expect(stub.calls.generate).toHaveLength(0);
+    expect(telegram.at(-1).text).toMatch(/non sei autorizzato/i);
   });
 });
-

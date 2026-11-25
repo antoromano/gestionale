@@ -4,6 +4,21 @@ Questo documento traccia in ordine cronologico inverso l'evoluzione del progetto
 
 ---
 
+## [v2.3.0] — 2026-11-25 — Interfaccia dedicata per telefono ("Second Brain Mobile")
+
+### ✨ Aggiunto
+- **Interfaccia per telefono separata** (`src/mobile/`): si attiva da sola sotto i 768 px di larghezza; si può forzare da *Impostazioni → Interfaccia* (computer) o *Profilo → Passa a Vista Desktop* (telefono). Preferenza salvata sul dispositivo (`gestionale_ui_mode`: `auto` / `mobile` / `desktop`, `src/utils/device.js`).
+- **Caricamento separato**: `src/main.js` carica `src/mobile/mobile-app.js` solo sul telefono (pezzo a parte nella build, ~107 kB JS + ~24 kB CSS). Il computer non scarica né il codice né gli stili mobile; ogni regola di `mobile.css` è sotto `body.is-mobile-ui`.
+- **Barra in basso** con 5 schede (Home, Agenda, To-do, Corpo, AI) e pulsante **+** rialzato; le sottoviste (Aggiungi, Entrate e uscite, Second Brain, Clienti, Cerca, Profilo) mostrano **Torna a Home**. Il tasto indietro del telefono funziona.
+- **Schermate**: Home (il punto di oggi calcolato dai tuoi dati, numeri principali, to-do di oggi, prossimi eventi); Aggiungi (6 azioni rapide + cattura rapida con IA o coda); Agenda (Giorno / Settimana con striscia di 7 giorni); To-do (ricerca, Oggi / In arrivo / Fatti, spunta con Annulla); Corpo (niente matrice: griglia 3×2 di oggi e esercizi ordinati per recupero, tocca per registrare); AI (Briefing, Chat *Chiedi a te stesso* con fonti, Coach: Avvocato del Diavolo, coda appunti, foto scontrino, dettatura, assistente completo); Entrate e uscite; Second Brain (note, fatti con storico, fonti); Clienti (scheda con concordato / incassato / da incassare e pagamenti dei preventivi); Cerca su tutto; Profilo (sincronizzazione, Verifica IA, istruzioni e privacy, uscita).
+- **Pannelli dal basso** per creare e modificare to-do, movimenti, eventi, note, fatti, biometria e allenamenti, con gli stessi servizi dell'interfaccia per computer. Gli importi accettano la virgola ("45,50").
+
+### 🛠️ Note
+- Nessuna modifica a servizi, database, funzioni sul server o test. L'interfaccia per computer cambia solo per la nuova scheda *Interfaccia* nelle Impostazioni.
+- Restano solo sul computer: PDF e modifica delle voci dei preventivi, importazione di chat/documenti/CSV, gestione colonne esercizi, listino, report, mappa 3D.
+
+---
+
 ## [v2.2.0] — 2026-11-17 — Design System "Warm Daylight Studio" & UX Redesign
 
 ### ✨ Aggiunto

@@ -662,6 +662,7 @@ describe('24. Chat "Chiedi a te stesso" (STEP 4)', () => {
 
     const { calls } = stubOpenAI(() => ({ answer: 'Ok', used_sources: ['S1', 'L1'] }));
     const env = { OPENAI_API_KEY: 'sk-test' };
+    fake.state.calls.length = 0; // da qui in poi contano solo le letture fatte dalla chat
     const res = await askPersonalRagServer({ client: fake.service(), userId, env, fetchFn: fetch, question: 'Cosa cucino con il pollo?', today: TODAY });
 
     const system = calls.generate[0].system;
@@ -673,6 +674,12 @@ describe('24. Chat "Chiedi a te stesso" (STEP 4)', () => {
     expect(system).not.toContain('DATO-ALTRUI');            // niente dati di altri utenti
     expect(res.sources.map(s => s.id)).toEqual(['S1', 'L1']);
     expect(res.context.embeddingSource).toBe('openai');
+    // le tabelle con l'interruttore spento non vengono nemmeno lette dal database
+    const read = fake.state.calls.map(c => c.table);
+    expect(read).not.toContain('finance_transactions');
+    expect(read).not.toContain('clients');
+    expect(read).not.toContain('appointments');
+    expect(read).toContain('body_daily_logs');
   });
 });
 

@@ -224,6 +224,7 @@ describe('18. Telegram → cloud → app (percorso reale, con RLS)', () => {
   it('10. parseCommand riconosce solo i comandi del bot', () => {
     expect(parseCommand('/digest')).toEqual({ name: 'digest', args: '' });
     expect(parseCommand('/queue@MioBot ciao')).toEqual({ name: 'queue', args: 'ciao' });
+    expect(parseCommand('/ask cosa cucino stasera?')).toEqual({ name: 'ask', args: 'cosa cucino stasera?' });
     expect(parseCommand('/altro')).toBeNull();
   });
 });

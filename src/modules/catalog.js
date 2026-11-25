@@ -24,9 +24,9 @@ export function renderCatalog(container, router) {
   const categories = Array.from(new Set(items.map(it => it.category).filter(Boolean)));
 
   container.innerHTML = `
-    <div class="card" style="margin-bottom: 20px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-        <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1;">
+    <div class="card" style="margin-bottom: 20px; padding: 14px 18px;">
+      <div class="filter-toolbar">
+        <div class="filter-toolbar-left">
           <input
             type="text"
             id="cat-search-input"

@@ -122,12 +122,12 @@ export function renderDashboard(container, router) {
               const client = t.client_id ? store.getById('clients', t.client_id) : null;
               const isOverdue = t.due_date && t.due_date < now.toISOString();
               return `
-                <div style="display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; background: #fafafa; border: 1px solid var(--border); border-radius: 7px; gap: 10px;">
+                <div class="surface-box" style="display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; gap: 10px;">
                   <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
-                    <input type="checkbox" data-todo-id="${t.id}" class="dashboard-complete-todo" style="width: 16px; height: 16px; cursor: pointer; accent-color: #09090b;" />
+                    <input type="checkbox" data-todo-id="${t.id}" class="dashboard-complete-todo" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-primary);" />
                     <div style="min-width: 0;">
-                      <div style="font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-main);">${t.title}</div>
-                      <div style="font-size: 11px; color: var(--text-muted); display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px;">
+                      <div style="font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary);">${t.title}</div>
+                      <div style="font-size: 11.5px; color: var(--text-tertiary); display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px;">
                         ${client ? `<span>${client.company_name || `${client.first_name} ${client.last_name}`}</span>` : ''}
                         ${t.due_date ? `<span class="mono" style="${isOverdue ? 'color: var(--danger); font-weight: 600;' : ''}">${formatDateTime(t.due_date)}</span>` : ''}
                         ${t.compensation_amount > 0 ? `<span class="mono" style="color: var(--success); font-weight: 600;">${formatCurrency(t.compensation_amount)}</span>` : ''}
@@ -138,7 +138,7 @@ export function renderDashboard(container, router) {
                     <span class="badge ${t.priority === 'urgente' ? 'badge-red' : t.priority === 'alta' ? 'badge-yellow' : 'badge-gray'}">
                       ${t.priority}
                     </span>
-                    <button type="button" class="btn btn-sm btn-secondary dashboard-edit-todo" data-todo-id="${t.id}" title="Modifica">✏️</button>
+                    <button type="button" class="btn btn-sm btn-secondary btn-icon dashboard-edit-todo" data-todo-id="${t.id}" title="Modifica">✏️</button>
                   </div>
                 </div>
               `;
@@ -166,17 +166,17 @@ export function renderDashboard(container, router) {
             ${upcomingAppointments.map(a => {
               const client = a.client_id ? store.getById('clients', a.client_id) : null;
               return `
-                <div class="dashboard-appt-row row-click" data-id="${a.id}" title="Clicca per modificare" style="padding: 9px 11px; background: #fafafa; border: 1px solid var(--border); border-radius: 7px;">
+                <div class="dashboard-appt-row row-click surface-box-interactive" data-id="${a.id}" title="Clicca per modificare">
                   <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
-                    <div style="font-weight: 600; font-size: 13px; color: var(--text-main);">${a.title}</div>
+                    <div style="font-weight: 600; font-size: 13.5px; color: var(--text-primary);">${a.title}</div>
                     <span class="badge ${a.is_shooting || a.activity_type === 'deploy' ? 'badge-blue' : 'badge-gray'}">
                       ${a.activity_type === 'deploy' ? 'Deploy' : (a.is_shooting ? (a.shooting_type || 'Shooting') : 'Incontro')}
                     </span>
                   </div>
-                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap;">
+                  <div style="font-size: 11.5px; color: var(--text-tertiary); margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap;">
                     <span class="mono">${formatDateTime(a.start_time)}</span>
                     ${a.location ? `<span>${a.location}</span>` : ''}
-                    ${client ? `<span style="font-weight: 500; color: var(--text-main);">${client.company_name || `${client.first_name} ${client.last_name}`}</span>` : ''}
+                    ${client ? `<span style="font-weight: 500; color: var(--text-primary);">${client.company_name || `${client.first_name} ${client.last_name}`}</span>` : ''}
                   </div>
                 </div>
               `;
@@ -206,17 +206,17 @@ export function renderDashboard(container, router) {
           ${openJobs.map(q => {
             const client = q.client_id ? store.getById('clients', q.client_id) : null;
             return `
-              <div class="dashboard-job-card row-click" data-id="${q.id}" title="Clicca per aprire pagamenti e lavori" style="border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: #fafafa;">
+              <div class="dashboard-job-card row-click surface-box-interactive" data-id="${q.id}" title="Clicca per aprire pagamenti e lavori" style="padding: 12px 14px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                  <span class="mono" style="font-size: 11px; font-weight: 600; color: var(--accent);">#${q.quote_number}</span>
+                  <span class="mono" style="font-size: 11px; font-weight: 600; color: var(--accent-primary);">#${q.quote_number}</span>
                   <span class="badge badge-blue">${q.work_status || 'In corso'}</span>
                 </div>
-                <div style="font-weight: 600; font-size: 13.5px; margin-bottom: 4px; color: var(--text-main);">${q.title}</div>
-                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">
+                <div style="font-weight: 600; font-size: 13.75px; margin-bottom: 4px; color: var(--text-primary);">${q.title}</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">
                   ${client ? (client.company_name || `${client.first_name} ${client.last_name}`) : 'Cliente manuale'}
                 </div>
                 ${q.expected_delivery ? `
-                  <div style="font-size: 11px; color: var(--text-muted);">
+                  <div style="font-size: 11px; color: var(--text-tertiary);">
                     Consegna prevista: <strong class="mono">${formatDate(q.expected_delivery)}</strong>
                   </div>
                 ` : ''}

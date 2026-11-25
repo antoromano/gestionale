@@ -303,23 +303,23 @@ function renderFactsTab(activeFacts, allFacts) {
                 const isHistoryOpen = expandedHistoryKey === histKey;
 
                 return `
-                  <div style="padding: 10px 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius);">
+                  <div class="surface-box">
                     <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
                       <div>
                         <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                          <code style="font-size: 12px; font-weight: 700; color: var(--accent); background: #dbeafe; padding: 2px 6px; border-radius: 4px;">${f.fact_key}</code>
+                          <code style="font-size: 12px; font-weight: 700; color: var(--accent-primary); background: var(--accent-subtle); padding: 2px 6px; border-radius: 5px;">${f.fact_key}</code>
                           <span class="badge badge-gray" style="font-size: 10px;">${f.category}</span>
                         </div>
-                        <div style="font-size: 14px; font-weight: 700; color: var(--text-main); margin-top: 6px;">
+                        <div style="font-size: 14px; font-weight: 650; color: var(--text-primary); margin-top: 6px;">
                           ${escapeHtml(f.fact_value)}
                         </div>
-                        <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">
+                        <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 3px;">
                           Attivo dal: ${formatDateTime(f.valid_from || f.created_at)}
                         </div>
                       </div>
 
-                      <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                        <button type="button" class="btn btn-sm btn-secondary fact-edit-btn" data-id="${f.id}" title="Modifica">✏️</button>
+                      <div class="row-actions">
+                        <button type="button" class="btn btn-sm btn-secondary btn-icon fact-edit-btn" data-id="${f.id}" title="Modifica">✏️</button>
                         <button
                           type="button"
                           class="btn btn-sm ${history.length > 1 ? 'btn-primary' : 'btn-secondary'} fact-history-btn"
@@ -328,8 +328,8 @@ function renderFactsTab(activeFacts, allFacts) {
                         >
                           🕒 Storico (${history.length})
                         </button>
-                        <button type="button" class="btn btn-sm btn-secondary fact-invalidate-btn" data-id="${f.id}" title="Non vale più: lo sposto nello storico">⏸</button>
-                        <button type="button" class="btn btn-sm btn-danger fact-delete-btn" data-id="${f.id}" title="Elimina del tutto (era sbagliato)">🗑️</button>
+                        <button type="button" class="btn btn-sm btn-secondary btn-icon fact-invalidate-btn" data-id="${f.id}" title="Non vale più: lo sposto nello storico">⏸</button>
+                        <button type="button" class="btn btn-sm btn-danger btn-icon fact-delete-btn" data-id="${f.id}" title="Elimina del tutto (era sbagliato)">🗑️</button>
                       </div>
                     </div>
 
@@ -389,9 +389,9 @@ function renderMemoriesTab(memories) {
   });
 
   return `
-    <div class="card" style="margin-bottom: 20px;">
-      <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between;">
-        <div style="display: flex; gap: 8px; flex-wrap: wrap; flex: 1;">
+    <div class="card" style="margin-bottom: 20px; padding: 14px 18px;">
+      <div class="filter-toolbar">
+        <div class="filter-toolbar-left">
           <input
             type="text"
             id="brain-mem-search"
@@ -411,7 +411,7 @@ function renderMemoriesTab(memories) {
             ${allTags.map(t => `<option value="${t}" ${memoryTagFilter === t ? 'selected' : ''}>#${t}</option>`).join('')}
           </select>
         </div>
-        <div style="font-size: 12px; color: var(--text-muted);">
+        <div class="muted">
           ${filtered.length} note
         </div>
       </div>
@@ -601,16 +601,16 @@ function renderGraphTab(nodes, edges) {
             ` : `
               <div style="display: flex; flex-direction: column; gap: 6px;">
                 ${directEdges.map(e => `
-                  <div style="padding: 8px 10px; background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center;">
-                    <div style="font-size: 12px;">
+                  <div class="surface-box" style="padding: 8px 10px; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="font-size: 12.5px;">
                       <strong>[${e.source_label}]</strong>
-                      <span style="color: var(--accent); font-family: monospace; font-weight: 700; margin: 0 6px;">──(${e.relation_type})──&gt;</span>
+                      <span class="mono" style="color: var(--accent-primary); font-weight: 700; margin: 0 6px;">──(${e.relation_type})──&gt;</span>
                       <strong>[${e.target_label}]</strong>
                     </div>
                     <div class="row-actions">
                       <span class="badge badge-gray" style="font-size: 10px;">peso: ${e.weight}</span>
-                      <button type="button" class="btn btn-sm btn-secondary graph-edge-edit-btn" data-id="${e.id}" title="Modifica collegamento">✏️</button>
-                      <button type="button" class="btn btn-sm btn-danger graph-edge-delete-btn" data-id="${e.id}" title="Elimina collegamento">🗑️</button>
+                      <button type="button" class="btn btn-sm btn-secondary btn-icon graph-edge-edit-btn" data-id="${e.id}" title="Modifica collegamento">✏️</button>
+                      <button type="button" class="btn btn-sm btn-danger btn-icon graph-edge-delete-btn" data-id="${e.id}" title="Elimina collegamento">🗑️</button>
                     </div>
                   </div>
                 `).join('')}
@@ -620,7 +620,7 @@ function renderGraphTab(nodes, edges) {
 
           <!-- Correlazioni Indirette (2-Hop) -->
           <div>
-            <div style="font-size: 12px; font-weight: 700; color: #6d28d9; margin-bottom: 8px;">
+            <div style="font-size: 12px; font-weight: 700; color: var(--ai-primary); margin-bottom: 8px;">
               🛰️ Correlazioni Indirette Scoperte (2° Hop)
             </div>
             ${indirectEdges.length === 0 ? `
@@ -628,16 +628,16 @@ function renderGraphTab(nodes, edges) {
             ` : `
               <div style="display: flex; flex-direction: column; gap: 6px;">
                 ${indirectEdges.map(e => `
-                  <div style="padding: 8px 10px; background: #faf5ff; border: 1px solid #e9d5ff; border-radius: var(--radius); display: flex; justify-content: space-between; align-items: center;">
-                    <div style="font-size: 12px;">
+                  <div class="callout-box callout-ai" style="padding: 8px 10px; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="font-size: 12.5px; color: var(--text-primary);">
                       <strong>[${e.source_label}]</strong>
-                      <span style="color: #7c3aed; font-family: monospace; font-weight: 700; margin: 0 6px;">──(${e.relation_type})──&gt;</span>
+                      <span class="mono" style="color: var(--ai-primary); font-weight: 700; margin: 0 6px;">──(${e.relation_type})──&gt;</span>
                       <strong>[${e.target_label}]</strong>
                     </div>
                     <div class="row-actions">
-                      <span class="badge" style="background: #ede9fe; color: #5b21b6; font-size: 10px;">2° Hop</span>
-                      <button type="button" class="btn btn-sm btn-secondary graph-edge-edit-btn" data-id="${e.id}" title="Modifica collegamento">✏️</button>
-                      <button type="button" class="btn btn-sm btn-danger graph-edge-delete-btn" data-id="${e.id}" title="Elimina collegamento">🗑️</button>
+                      <span class="badge badge-purple" style="font-size: 10px;">2° Hop</span>
+                      <button type="button" class="btn btn-sm btn-secondary btn-icon graph-edge-edit-btn" data-id="${e.id}" title="Modifica collegamento">✏️</button>
+                      <button type="button" class="btn btn-sm btn-danger btn-icon graph-edge-delete-btn" data-id="${e.id}" title="Elimina collegamento">🗑️</button>
                     </div>
                   </div>
                 `).join('')}

@@ -2,6 +2,22 @@
 
 Software gestionale web moderno, reattivo, installabile come **PWA (Progressive Web App)** su desktop, tablet e smartphone, e **completamente riutilizzabile e personalizzabile** per qualsiasi nuova attività o professionista attraverso la sezione **Impostazioni**, senza dover modificare il codice sorgente.
 
+> 📋 **Documentazione & Storico Versioni**:
+> - **[CHANGELOG.md](./CHANGELOG.md)** — Storico cronologico completo di tutte le versioni (`v1.0.0` ➔ `v2.2.0`), funzionalità aggiunte e bug risolti.
+> - **[UX_AUDIT_AND_SPEC.md](./UX_AUDIT_AND_SPEC.md)** — Audit UX, specifica del Design System *"Warm Daylight Studio"* e architettura ergonomica dell'Assistente AI.
+
+---
+
+## 🕒 Riepilogo Storico Versioni
+
+| Versione | Data | Cosa è stato aggiunto e sistemato |
+| :--- | :--- | :--- |
+| **[v2.2.0](./CHANGELOG.md#v220--2026-11-17--design-system-warm-daylight-studio--ux-redesign)** | `2026-11-17` | **Design System "Warm Daylight Studio" & UX Redesign**: unificazione fogli di stile (`main.css` + `ui.css`), palette riposante ad alto contrasto WCAG AAA, **Side-Drawer laterale non bloccante** per l'Assistente AI su desktop (espandibile `480px` ↔ `740px` senza coprire i dati del gestionale), compattazione bottoni tabella Preventivi, KPI card e barre filtro uniformate, skeleton shimmer loader. |
+| **[v2.1.0](./CHANGELOG.md#v210--2026-11-17--personal-rag-chiedi-a-te-stesso-importatore-storico--ask-telegram)** | `2026-11-17` | **Personal RAG ("Chiedi a te stesso") & Importatore Fonti**: migrazione `010_personal_rag.sql`, Edge Function `personal-rag-chat`, ricerca ibrida (`pgvector` OpenAI 768d + Full-Text italiano), importatore conversazioni ChatGPT / Claude / Gemini Takeout / PDF / Markdown con stima costi e pausa/ripresa, estrazione fatti solo dai messaggi dell'utente con data originale, interruttori privacy (**Finanze escluse di default**), comando Telegram `/ask`. |
+| **[v2.0.0](./CHANGELOG.md#v200--2026-11-16--architettura-cloud-first-catena-multi-provider-ai--dedup-telegram)** | `2026-11-16` | **Cloud-First, Catena Multi-Provider AI & Dedup Telegram**: migrazioni `007`–`009`, sincronizzazione Realtime tra Web App e Telegram con blocco a singolo proprietario, catena AI con failover automatico (**OpenAI** ➔ **Gemini Lite** ➔ **Claude**), elaborazione Telegram in background anti-doppioni, tasto *Annulla* (5s), navigazione *Indietro* e CRUD completi. |
+| **[v1.5.0](./CHANGELOG.md#v150--2026-11-12--finanze--cash-flow-compravendita-importatore-csvxlsx--coda-appunti)** | `2026-11-12` | **Finanze & Cash Flow, Compravendita, Importatore CSV/XLSX & Coda Appunti**: ledger Entrate/Uscite, ricorrenze idempotenti, modulo Flipping con Margine Netto e ROI %, importatore deterministico zero-token, coda note (`/queue` e `/digest`) e modalità *Avvocato del Diavolo*. |
+| **[v1.0.0](./CHANGELOG.md#v100--rilascio-iniziale--gestionale-operativo-second-brain-tri-layer--matrice-body)** | `Iniziale` | **Rilascio Iniziale**: Dashboard *Oggi*, *Clienti* (con GitHub live e MRR), *Preventivi* (con foto per voce, autosave IndexedDB e doppio motore PDF), *Body* (Matrice Diario + 3D), *Second Brain Tri-Layer* (Memorie, Fatti Mem0, Knowledge Graph 3D). |
+
 ---
 
 ## 🌟 Caratteristiche Chiave
@@ -21,7 +37,7 @@ Software gestionale web moderno, reattivo, installabile come **PWA (Progressive 
 - **Personal RAG — "Chiedi a te stesso" & Importatore Storico Chat/Documenti**: la sezione **Second Brain** è organizzata in 5 schede (`Chiedi`, `Fonti`, `Note`, `Fatti`, `Mappa`). Importi conversazioni da **ChatGPT, Claude, Gemini (Takeout), PDF, Markdown e testo** con stima costi, pausa/ripresa, pulizia dei convenevoli, spezzettamento in blocchi (*chunks*) con vettori OpenAI (`text-embedding-3-small` a 768 dimensioni), ricerca ibrida (significato + parole esatte in italiano) ed estrazione fatti **solo dai tuoi messaggi** rispettando la data reale della conversazione.
 - **Chat Personale con Fonti Citate, Istruzioni a Strati & Privacy**: interroghi il tuo archivio (dall'app o con `/ask <domanda>` su Telegram) ricevendo risposte con citazioni cliccabili, regole generali e per argomento personalizzabili, interruttori di privacy per i dati vivi del gestionale (**Finanze e Clienti spenti di default**) e pulsante *"+ Salva regola in memoria"*.
 - **Avvocato del Diavolo & Profili Specializzati**: toggle nell'assistente che stress-testa preventivi, margini di compravendita e carichi di allenamento con evidenze numeriche dai tuoi dati; il profilo di prompt (Ingestion Batch, Nutrizione/Fitness, Finance Coach, Second Brain) è scelto in automatico dal modulo attivo.
-- **Assistente IA Multimodale (Google Gemini)**: Accetta testo, foto o note vocali registrate direttamente dal microfono del dispositivo. Estrae to-do e appuntamenti multipli senza confondere nomi di servizi con clienti, con anteprima modificabile e disambiguazione prima del salvataggio.
+- **Assistente IA Multimodale con Side-Drawer Non-Bloccante**: Accetta testo, foto o note vocali registrate direttamente dal microfono del dispositivo. Su desktop (`>= 1024px`) si apre come **pannello laterale destro non bloccante** (espandibile con `⇄`) che permette di leggere e scorrere i dati del gestionale sottostanti mentre si interagisce con l'IA; su mobile si adatta a tutto schermo. Estrae to-do, appuntamenti, clienti, spese e log Body con anteprima modificabile prima del salvataggio.
 - **Sincronizzazione Bidirezionale Calendario (Google Calendar) & Notion**: Predisposta via Edge Functions con gestione token server-side protetta e risoluzione conflitti documentata.
 - **Backup & Ripristino Completo**: Esportazione ed importazione di tutti i dati, impostazioni e immagini in formato JSON autonomo, ripristinabile in qualsiasi nuova installazione.
 - **Cestino con Soft-Delete**: Protezione contro le eliminazioni accidentali con ripristino o eliminazione definitiva.

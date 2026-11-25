@@ -45,9 +45,9 @@ export function renderTodos(container, router) {
 
   container.innerHTML = `
     <!-- Barra superiore con ricerca e pulsanti azione -->
-    <div class="card" style="margin-bottom: 20px;">
-      <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between;">
-        <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1;">
+    <div class="card" style="margin-bottom: 20px; padding: 14px 18px;">
+      <div class="filter-toolbar">
+        <div class="filter-toolbar-left">
           <input
             type="text"
             id="todos-search-input"
@@ -68,7 +68,7 @@ export function renderTodos(container, router) {
           </select>
         </div>
 
-        <div style="display: flex; gap: 8px;">
+        <div class="filter-toolbar-right">
           <button id="todos-open-ai-btn" class="btn btn-ai">
             ✨ Assistente IA
           </button>
